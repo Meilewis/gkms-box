@@ -187,7 +187,7 @@ function buildHelpMessage(config, catalog) {
     '',
     '可用指令：',
     `1. @${bot} 绑定 — 获取网页链接与使用说明`,
-    `2. @${bot} 绑定 <9位短码 或 Base64代码> — 绑定/更新你的 BOX（也支持 绑定box）`,
+    `2. @${bot} 绑定+代码 — 绑定/更新你的 BOX（例如：@${bot} 绑定 g12345678）`,
     `3. @${bot} 查box / 晒box — 生成你的持卡统计与拼图`,
     `4. @${bot} 查box 支援卡 / P卡 / 筱泽广 — 按分类或偶像晒图（也可 @群友 看对方 BOX）`,
     `5. @${bot} 解绑box — 清除已绑定的数据`,
@@ -301,7 +301,7 @@ function apply(ctx, config) {
     if (!plainText) return next();
 
     const isHelp = /^(?:绑定|box|box帮助|boxhelp)$/i.test(plainText);
-    const bindMatch = /^绑定(?:\s*box)?(?:\s+([\s\S]+))?$/i.exec(plainText);
+    const bindMatch = /^绑定(?:\s*box)?(?:[\s+]+([\s\S]+)|((?:g\d{8}|[A-Za-z0-9+/]{6,}={0,2})(?:\s+[\s\S]+)?))?$/i.exec(plainText);
     const queryMatch = /^(?:查|晒)\s*box(?:\s+([\s\S]*))?$/i.exec(plainText);
     const unbindMatch = /^解绑\s*box$/i.test(plainText);
 
@@ -332,7 +332,7 @@ function apply(ctx, config) {
     }
 
     if (bindMatch) {
-      const rawArg = (bindMatch[1] || '').trim();
+      const rawArg = (bindMatch[1] || bindMatch[2] || '').trim();
       if (!rawArg) {
         return (
           `请附上从网页生成的 9 位短码或 Base64 代码，例如：\n` +
