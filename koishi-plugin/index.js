@@ -186,8 +186,8 @@ function buildHelpMessage(config, catalog) {
       : '网页工具：尚未配置自定义域名（当前已可直接发送 Base64 代码进行绑定与拼图）',
     '',
     '可用指令：',
-    `1. @${bot} box — 查看工具入口与说明`,
-    `2. @${bot} 绑定box <9位短码 或 Base64代码> — 绑定/更新你的 BOX`,
+    `1. @${bot} 绑定 — 获取网页链接与使用说明`,
+    `2. @${bot} 绑定 <9位短码 或 Base64代码> — 绑定/更新你的 BOX（也支持 绑定box）`,
     `3. @${bot} 查box / 晒box — 生成你的持卡统计与拼图`,
     `4. @${bot} 查box 支援卡 / P卡 / 筱泽广 — 按分类或偶像晒图（也可 @群友 看对方 BOX）`,
     `5. @${bot} 解绑box — 清除已绑定的数据`,
@@ -300,8 +300,8 @@ function apply(ctx, config) {
     const plainText = extractPlainText(session);
     if (!plainText) return next();
 
-    const isHelp = /^(?:box|box帮助|boxhelp)$/i.test(plainText);
-    const bindMatch = /^绑定\s*box(?:\s+([\s\S]+))?$/i.exec(plainText);
+    const isHelp = /^(?:绑定|box|box帮助|boxhelp)$/i.test(plainText);
+    const bindMatch = /^绑定(?:\s*box)?(?:\s+([\s\S]+))?$/i.exec(plainText);
     const queryMatch = /^(?:查|晒)\s*box(?:\s+([\s\S]*))?$/i.exec(plainText);
     const unbindMatch = /^解绑\s*box$/i.test(plainText);
 
@@ -336,7 +336,7 @@ function apply(ctx, config) {
       if (!rawArg) {
         return (
           `请附上从网页生成的 9 位短码或 Base64 代码，例如：\n` +
-          `@${botName} 绑定box g12345678\n` +
+          `@${botName} 绑定 g12345678\n` +
           (config.webUrl ? `网页工具：${config.webUrl}` : '')
         ).trim();
       }
@@ -450,7 +450,7 @@ function apply(ctx, config) {
       const rows = await ctx.database.get('gkms_box_binding', { userKey: targetUserKey });
       if (!rows.length) {
         return isSelf
-          ? `你还没有绑定 BOX 哦，请先发送「@${botName} 绑定box <代码>」完成绑定。`
+          ? `你还没有绑定 BOX 哦，请先发送「@${botName} 绑定」查看教程或「@${botName} 绑定 <代码>」完成绑定。`
           : '这位群友还没有绑定过 BOX 哦。';
       }
 
