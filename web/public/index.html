@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>学园偶像大师 BOX 共享与绑定工具</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+
+  <div id="app" class="app-shell">
+    <header class="top-header glass-panel">
+      <div class="brand-block">
+        <div class="brand-badge">GAKUEN IDOLMASTER • BOX STUDIO</div>
+        <h1>学园偶像大师 BOX 共享工具</h1>
+        <p class="subtitle">
+          离线可用 · 零外部依赖 · 点击卡片录入持卡，支持生成长图与 QQ 机器人绑定短码
+          <span id="metaSummary" class="meta-pill">正在加载卡池目录...</span>
+        </p>
+      </div>
+
+      <div class="action-dock">
+        <div class="export-img-row">
+          <button id="btnExportCurrentImg" class="btn btn-primary" disabled>
+            <span class="btn-icon">🖼</span>
+            <span id="btnExportCurrentLabel">生成当前页汇总图</span>
+          </button>
+          <button id="btnExportAllImg" class="btn btn-accent" disabled>
+            <span class="btn-icon">✨</span>
+            <span>导出 S+P 总览图</span>
+          </button>
+        </div>
+
+        <div class="short-bind-row">
+          <button id="btnShortCode" class="btn btn-gold" disabled>
+            生成并复制 9 位短码 (g########)
+          </button>
+          <button id="btnOpenImport" class="btn btn-ghost">导入代码 / 短码</button>
+          <button id="btnResetCurrent" class="btn btn-danger-soft">清空当前页</button>
+        </div>
+
+        <div id="shortCodeBanner" class="short-banner hidden">
+          <div class="short-banner-main">
+            <span class="short-label">短码已复制</span>
+            <code id="shortCodeValue" class="short-code"></code>
+          </div>
+          <div class="short-banner-bot">
+            <span>发给 QQ 机器人绑定：</span>
+            <code id="botCmdPreview" class="bot-cmd"></code>
+            <button id="btnCopyBotCmd" class="btn-mini">复制指令</button>
+          </div>
+        </div>
+
+        <div class="b64-row">
+          <div class="b64-chip" id="chipCopySupport" title="点击复制支援卡 Base64 代码">
+            <span class="b64-tag">S卡代码</span>
+            <span id="supportCodePreview" class="b64-val">暂无持有卡片</span>
+            <span class="b64-copy">复制</span>
+          </div>
+          <div class="b64-chip" id="chipCopyCidol" title="点击复制角色与皮肤 Base64 代码">
+            <span class="b64-tag">P卡代码</span>
+            <span id="cidolCodePreview" class="b64-val">暂无持有角色</span>
+            <span class="b64-copy">复制</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-tab="support">
+        <span>支援卡（S卡）</span>
+        <span id="tabCountSupport" class="tab-badge">0/0</span>
+      </button>
+      <button class="tab-btn" data-tab="cidol">
+        <span>角色与皮肤（P卡）</span>
+        <span id="tabCountCidol" class="tab-badge">0/0</span>
+      </button>
+    </nav>
+
+    <section id="statsPanel" class="stats-panel glass-panel"></section>
+
+    <section id="filterBar" class="filter-bar glass-panel"></section>
+
+    <div id="tipBanner" class="tip-banner"></div>
+
+    <main id="cardGrid" class="card-grid"></main>
+
+    <footer class="site-footer">
+      <p>
+        交互与编码思路借鉴自 <strong>kitsurato/mini-gkms-box</strong> · 卡池数据同步自 <strong>vertesan/gakumasu-diff</strong> · 本项目代码由 AI 辅助生成，仅供非官方同好交流
+      </p>
+      <p>© Bandai Namco Entertainment Inc. / QualiArts, Inc. 相关游戏名称与角色卡面素材版权均归原权利人所有</p>
+    </footer>
+  </div>
+
+  <!-- 导入弹窗 -->
+  <div id="importModal" class="modal-backdrop hidden">
+    <div class="modal-card glass-panel">
+      <div class="modal-header">
+        <h3>导入 BOX 代码 / 短码</h3>
+        <button class="modal-close" data-close-modal="importModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          支持粘贴 <strong>9 位短码</strong>（如 <code>g52396342</code>），也支持直接粘贴 <strong>S卡或 P卡 Base64 长码</strong>（会自动识别类型并覆盖对应分区）。
+        </p>
+        <textarea id="importTextarea" class="import-textarea" rows="5" placeholder="粘贴 g12345678 或 Base64 字符串..."></textarea>
+        <div id="importError" class="modal-error hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close-modal="importModal">取消</button>
+        <button id="btnConfirmImport" class="btn btn-primary">解析并导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 汇总长图预览弹窗 -->
+  <div id="imageModal" class="modal-backdrop hidden">
+    <div class="modal-card modal-card-wide glass-panel">
+      <div class="modal-header">
+        <h3 id="imageModalTitle">生成的汇总长图（手机端可长按保存）</h3>
+        <div class="modal-header-actions">
+          <a id="btnDownloadImage" class="btn btn-primary btn-sm" download="gkms_box.jpg">下载图片</a>
+          <button class="modal-close" data-close-modal="imageModal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body image-preview-wrap">
+        <img id="generatedPreviewImg" alt="BOX 汇总长图">
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="./codec.js"></script>
+  <script src="./canvas-export.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

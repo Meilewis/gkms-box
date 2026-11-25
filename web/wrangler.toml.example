@@ -1,0 +1,11 @@
+# Cloudflare Pages 配置参考文件
+# 部署到 Cloudflare Pages 时请在仪表盘绑定名为 BOX_BINDS 的 KV 命名空间
+name = "gkms-box"
+compatibility_date = "2025-11-01"
+pages_build_output_dir = "public"
+
+# 本地用 wrangler pages dev 调试时可取消下方注释并填入你自己的 KV Namespace ID：
+# [[kv_namespaces]]
+# binding = "BOX_BINDS"
+# id = "YOUR_KV_NAMESPACE_ID"
+# preview_id = "YOUR_PREVIEW_KV_NAMESPACE_ID"

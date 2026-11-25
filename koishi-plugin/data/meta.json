@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-11-25T11:21:19Z",
+  "source": {
+    "repo": "vertesan/gakumasu-diff",
+    "branch": "main"
+  },
+  "counts": {
+    "characters": 14,
+    "support": 201,
+    "supportSsr": 117,
+    "supportSr": 84,
+    "cidol": 315
+  }
+}

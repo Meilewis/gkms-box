@@ -1,0 +1,15 @@
+{
+  "name": "koishi-plugin-gkms-box",
+  "version": "1.0.0",
+  "description": "《学园偶像大师》BOX 绑定、统计查询与离线 Puppeteer 拼图生成 Koishi 插件",
+  "main": "index.js",
+  "license": "MIT",
+  "koishi": {
+    "service": {
+      "required": [
+        "database",
+        "puppeteer"
+      ]
+    }
+  }
+}
