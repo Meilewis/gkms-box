@@ -78,6 +78,53 @@ test('mergeRecognizedDetections 优先保留清晰未遮挡帧并正确排序', 
   assert.equal(merged.items[2].seenCount, 2);
 });
 
+test('mergeRecognizedDetections 冲突检测：同源跨格报冲突，跨图或分带重叠不误报', () => {
+  // 1. 同源文件不同列命中同一 key -> conflict=true, needsReview=true
+  const crossCol = Importer.mergeRecognizedDetections(
+    [
+      { key: '3-0001', breakLevel: 4, needsReview: false, quality: 5.0, rawSim: 0.98, sourceName: 'shotA.png', colIndex: 0, absY: 100, cardH: 120 },
+      { key: '3-0001', breakLevel: 2, needsReview: false, quality: 4.5, rawSim: 0.91, sourceName: 'shotA.png', colIndex: 2, absY: 100, cardH: 120 },
+    ],
+    catalogByKey
+  );
+  assert.equal(crossCol.items[0].conflict, true);
+  assert.equal(crossCol.items[0].needsReview, true);
+  assert.equal(crossCol.items[0].breakLevel, 4);
+
+  // 2. 同源文件同列纵向相距 >= 半卡高 -> conflict=true
+  const farSameCol = Importer.mergeRecognizedDetections(
+    [
+      { key: '3-0002', breakLevel: 1, needsReview: false, quality: 4.8, rawSim: 0.95, sourceName: 'long.png', colIndex: 1, absY: 200, cardH: 120 },
+      { key: '3-0002', breakLevel: 3, needsReview: false, quality: 4.7, rawSim: 0.94, sourceName: 'long.png', colIndex: 1, absY: 500, cardH: 120 },
+    ],
+    catalogByKey
+  );
+  assert.equal(farSameCol.items[0].conflict, true);
+  assert.equal(farSameCol.items[0].needsReview, true);
+
+  // 3. 同源文件同列分带重叠（absY 差 < 20px）-> 不冲突
+  const stripOverlap = Importer.mergeRecognizedDetections(
+    [
+      { key: '3-0003', breakLevel: 0, needsReview: false, quality: 4.9, rawSim: 0.97, sourceName: 'long.png', colIndex: 1, absY: 2440, cardH: 120 },
+      { key: '3-0003', breakLevel: 0, needsReview: false, quality: 4.8, rawSim: 0.96, sourceName: 'long.png', colIndex: 1, absY: 2452, cardH: 120 },
+    ],
+    catalogByKey
+  );
+  assert.ok(!stripOverlap.items[0].conflict);
+  assert.equal(stripOverlap.items[0].needsReview, false);
+
+  // 4. 不同源文件即使不同列/不同高度也不标冲突
+  const diffShots = Importer.mergeRecognizedDetections(
+    [
+      { key: '3-0004', breakLevel: 4, needsReview: false, quality: 4.9, rawSim: 0.97, sourceName: 'seg1.png', colIndex: 0, absY: 800, cardH: 120 },
+      { key: '3-0004', breakLevel: 4, needsReview: false, quality: 4.8, rawSim: 0.96, sourceName: 'seg2.png', colIndex: 2, absY: 120, cardH: 120 },
+    ],
+    catalogByKey
+  );
+  assert.ok(!diffShots.items[0].conflict);
+  assert.equal(diffShots.items[0].needsReview, false);
+});
+
 test('合成标准 3 列网格可在前端 JS 引擎中稳定识别网格与空白隔离', () => {
   const db = Importer.decodeFingerprintDb(fingerprintsPayload);
   const w = 720;

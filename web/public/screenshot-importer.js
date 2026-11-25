@@ -568,6 +568,7 @@
           needsReview,
           quality: Number(quality.toFixed(4)),
           absY: yOffset + y1,
+          cardH: y2 - y1,
           rowIndex: ri,
           colIndex: ci,
           sourceName,
@@ -628,17 +629,48 @@
   }
 
   /**
-   * 合并多张分段截图与长图分带重叠区出现的重复卡片，保留最清晰未遮挡的一帧
+   * 合并多张分段截图与长图分带重叠区出现的重复卡片，保留最清晰未遮挡的一帧；
+   * 若同一源文件内不同网格位置命中相同卡片 key，则标记 conflict 与 needsReview
    */
   function mergeRecognizedDetections(detections, catalogByKey = {}) {
     const byKey = new Map();
+    const positionsByKey = new Map();
+
+    const isSameSourceConflict = (item, pos) => {
+      if (!item.sourceName || !pos.sourceName || item.sourceName !== pos.sourceName) {
+        return false;
+      }
+      if (Number.isFinite(item.colIndex) && Number.isFinite(pos.colIndex) && item.colIndex !== pos.colIndex) {
+        return true;
+      }
+      if (Number.isFinite(item.absY) && Number.isFinite(pos.absY)) {
+        const minCardH = Math.min(item.cardH || 120, pos.cardH || 120);
+        const yDiffThreshold = Math.max(40, minCardH * 0.5);
+        if (Math.abs(item.absY - pos.absY) >= yDiffThreshold) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     for (const item of detections || []) {
       if (!item || !item.key) continue;
+      const posEntry = {
+        sourceName: item.sourceName || '',
+        colIndex: item.colIndex,
+        absY: item.absY,
+        cardH: item.cardH,
+      };
       const prev = byKey.get(item.key);
       if (!prev) {
+        positionsByKey.set(item.key, [posEntry]);
         byKey.set(item.key, { ...item, seenCount: 1 });
         continue;
       }
+
+      const positions = positionsByKey.get(item.key) || [];
+      const hasNewConflict = positions.some((pos) => isSameSourceConflict(item, pos));
+      positions.push(posEntry);
 
       const prevClear = !prev.needsReview;
       const curClear = !item.needsReview;
@@ -648,6 +680,10 @@
 
       const winner = preferCur ? { ...item } : { ...prev };
       winner.seenCount = (prev.seenCount || 1) + 1;
+      if (prev.conflict || item.conflict || hasNewConflict) {
+        winner.conflict = true;
+        winner.needsReview = true;
+      }
       byKey.set(item.key, winner);
     }
 

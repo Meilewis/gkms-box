@@ -5,17 +5,39 @@ const path = require('path');
 
 const MAX_JPEG_BYTES = 2850000;
 const RENDER_TIMEOUT_MS = 25000;
+const ASSET_WAIT_MS = 10000;
+const PAGE_CLOSE_WAIT_MS = 5000;
+const MAX_SCALE = 1.5;
+const MIN_SCALE = 0.5;
+const MAX_OUTPUT_HEIGHT_PX = 15000;
+const DATA_URL_CACHE_MAX_CHARS = 96 * 1024 * 1024;
 
 let renderQueue = Promise.resolve();
+let pendingRenderCount = 0;
 
+/**
+ * 串行渲染队列：前一个任务失败不影响后续任务；计数包含正在执行与排队中的任务
+ */
 function withRenderLock(fn) {
-  const task = renderQueue.then(fn, fn);
+  pendingRenderCount += 1;
+  const run = async () => {
+    try {
+      return await fn();
+    } finally {
+      pendingRenderCount -= 1;
+    }
+  };
+  const task = renderQueue.then(run, run);
   renderQueue = task.catch(() => {});
   return task;
 }
 
+function getPendingRenderCount() {
+  return pendingRenderCount;
+}
+
 function escapeHtml(str) {
-  return String(str || '')
+  return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -23,8 +45,31 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+// 卡图 dataURL 缓存（按路径 + mtime + size 失效，超出总量时按最久未使用淘汰）
+const dataUrlCache = new Map();
+let dataUrlCacheChars = 0;
+
 function fileToDataUrl(filePath) {
-  if (!filePath || !fs.existsSync(filePath)) return '';
+  if (!filePath) return '';
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (_) {
+    return '';
+  }
+  if (!stat.isFile()) return '';
+
+  const cached = dataUrlCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    dataUrlCache.delete(filePath);
+    dataUrlCache.set(filePath, cached);
+    return cached.dataUrl;
+  }
+  if (cached) {
+    dataUrlCache.delete(filePath);
+    dataUrlCacheChars -= cached.dataUrl.length;
+  }
+
   const ext = path.extname(filePath).toLowerCase();
   const mime =
     ext === '.webp'
@@ -34,8 +79,32 @@ function fileToDataUrl(filePath) {
         : ext === '.jpg' || ext === '.jpeg'
           ? 'image/jpeg'
           : 'application/octet-stream';
-  const buf = fs.readFileSync(filePath);
-  return `data:${mime};base64,${buf.toString('base64')}`;
+  let buf;
+  try {
+    buf = fs.readFileSync(filePath);
+  } catch (_) {
+    return '';
+  }
+  const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+
+  dataUrlCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, dataUrl });
+  dataUrlCacheChars += dataUrl.length;
+  while (dataUrlCacheChars > DATA_URL_CACHE_MAX_CHARS && dataUrlCache.size > 1) {
+    const oldestKey = dataUrlCache.keys().next().value;
+    const oldest = dataUrlCache.get(oldestKey);
+    dataUrlCache.delete(oldestKey);
+    dataUrlCacheChars -= oldest.dataUrl.length;
+  }
+  return dataUrl;
+}
+
+function clearDataUrlCache() {
+  dataUrlCache.clear();
+  dataUrlCacheChars = 0;
+}
+
+function getDataUrlCacheSize() {
+  return dataUrlCache.size;
 }
 
 function resolveSupportImageDataUrl(dataDir, card) {
@@ -48,10 +117,8 @@ function resolveCidolImageDataUrl(dataDir, skin) {
   if (!dataDir || !skin) return '';
   const dir = path.join(dataDir, 'assets', 'cidol');
   for (const variant of ['1', '0']) {
-    const p = path.join(dir, `cidol-${skin.key}_${variant}.webp`);
-    if (fs.existsSync(p)) {
-      return fileToDataUrl(p);
-    }
+    const url = fileToDataUrl(path.join(dir, `cidol-${skin.key}_${variant}.webp`));
+    if (url) return url;
   }
   return '';
 }
@@ -441,12 +508,93 @@ function buildRenderHtml({
 </html>`;
 }
 
-async function captureWithScale(getPage, html, scale, qualities) {
-  const page = await getPage();
+function floor2(n) {
+  return Math.floor(n * 100) / 100;
+}
+
+/**
+ * 关闭页面：重复关闭/关闭异常一律吞掉，且最多等待 PAGE_CLOSE_WAIT_MS，避免卡死渲染队列
+ */
+async function safeClosePage(page) {
+  if (!page || typeof page.close !== 'function') return;
+  let timer = null;
   try {
-    await page.setViewport({ width: 1400, height: 900, deviceScaleFactor: scale });
-    await page.setContent(html, { waitUntil: 'load', timeout: RENDER_TIMEOUT_MS });
-    await page.evaluate(async () => {
+    await Promise.race([
+      Promise.resolve()
+        .then(() => page.close())
+        .catch(() => {}),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, PAGE_CLOSE_WAIT_MS);
+      }),
+    ]);
+  } catch (_) {
+    // ignore
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * 只放行 data: 与 about: 请求，其余外部资源一律拦截（必须在 setContent 之前注册）
+ */
+async function lockDownRequests(page) {
+  await page.setRequestInterception(true);
+  page.on('request', (req) => {
+    try {
+      if (typeof req.isInterceptResolutionHandled === 'function' && req.isInterceptResolutionHandled()) {
+        return;
+      }
+      const url = String((typeof req.url === 'function' ? req.url() : req.url) || '');
+      const result = /^(?:data|about):/i.test(url) ? req.continue() : req.abort();
+      if (result && typeof result.catch === 'function') result.catch(() => {});
+    } catch (_) {
+      // ignore
+    }
+  });
+}
+
+async function measureCanvasRoot(page) {
+  const rootEl = await page.$('#canvas-root');
+  const box = rootEl ? await rootEl.boundingBox() : null;
+  if (!box || !(box.width > 0) || !(box.height > 0)) {
+    throw new Error('拼图画布边界测量失败');
+  }
+  return {
+    x: Math.floor(box.x),
+    y: Math.floor(box.y),
+    width: Math.ceil(box.width),
+    height: Math.ceil(box.height),
+  };
+}
+
+async function shootWithQualities(page, clip, scale, qualities) {
+  let lastBuf = null;
+  for (const q of qualities) {
+    const buf = await page.screenshot({ clip, type: 'jpeg', quality: q });
+    lastBuf = buf;
+    if (buf.length < MAX_JPEG_BYTES) {
+      return { buffer: buf, quality: q, scale, width: clip.width, height: clip.height, oversized: false };
+    }
+  }
+  return {
+    buffer: lastBuf,
+    quality: qualities[qualities.length - 1],
+    scale,
+    width: clip.width,
+    height: clip.height,
+    oversized: true,
+  };
+}
+
+/**
+ * 在已获取的页面上完成：请求拦截 → 1x 测量 → 按高度自适应缩放 → 逐级降质量截图
+ */
+async function captureOnPage(page, html, { assetWaitMs = ASSET_WAIT_MS, contentTimeoutMs = RENDER_TIMEOUT_MS } = {}) {
+  await lockDownRequests(page);
+  await page.setViewport({ width: 1400, height: 900, deviceScaleFactor: 1 });
+  await page.setContent(html, { waitUntil: 'load', timeout: contentTimeoutMs });
+  await page.evaluate(async (waitMs) => {
+    const ready = (async () => {
       if (document.fonts && document.fonts.ready) {
         await document.fonts.ready;
       }
@@ -461,63 +609,79 @@ async function captureWithScale(getPage, html, scale, qualities) {
               })
         )
       );
-    });
-    const rootEl = await page.$('#canvas-root');
-    const clip = rootEl ? await rootEl.boundingBox() : null;
-    if (!clip || clip.width <= 0 || clip.height <= 0) {
-      throw new Error('拼图画布边界测量失败');
-    }
+    })();
+    await Promise.race([ready, new Promise((res) => setTimeout(res, waitMs))]);
+  }, assetWaitMs);
 
-    let lastBuf = null;
-    for (const q of qualities) {
-      const buf = await page.screenshot({
-        clip: {
-          x: Math.floor(clip.x),
-          y: Math.floor(clip.y),
-          width: Math.ceil(clip.width),
-          height: Math.ceil(clip.height),
-        },
-        type: 'jpeg',
-        quality: q,
-      });
-      lastBuf = buf;
-      if (buf.length < MAX_JPEG_BYTES) {
-        return { buffer: buf, quality: q, scale, width: Math.ceil(clip.width), height: Math.ceil(clip.height) };
-      }
-    }
-    return { buffer: lastBuf, quality: qualities[qualities.length - 1], scale, oversized: true };
-  } finally {
-    await page.close().catch(() => {});
+  const baseClip = await measureCanvasRoot(page);
+  const scale = floor2(Math.min(MAX_SCALE, MAX_OUTPUT_HEIGHT_PX / baseClip.height));
+  if (!(scale >= MIN_SCALE)) {
+    throw new Error('拼图过长');
   }
+
+  await page.setViewport({ width: 1400, height: 900, deviceScaleFactor: scale });
+  const clip = await measureCanvasRoot(page);
+  const firstPass = await shootWithQualities(page, clip, scale, [86, 76, 66, 56]);
+  if (!firstPass.oversized) return firstPass;
+
+  // 体积仍超限：降低缩放倍率再按更低质量重试
+  const fallbackScale = Math.max(MIN_SCALE, floor2(Math.min(1, scale * 0.7)));
+  if (fallbackScale >= scale) return firstPass;
+  await page.setViewport({ width: 1400, height: 900, deviceScaleFactor: fallbackScale });
+  const clip2 = await measureCanvasRoot(page);
+  return shootWithQualities(page, clip2, fallbackScale, [74, 62, 52]);
 }
 
-async function renderBoxImage({
-  getPage,
-  dataDir,
-  htmlPayload,
-}) {
+async function renderBoxImage({ getPage, dataDir, htmlPayload, timeoutMs = RENDER_TIMEOUT_MS }) {
   return withRenderLock(async () => {
     const html = buildRenderHtml({ ...htmlPayload, dataDir });
-    const runWithTimeout = (promise) =>
-      Promise.race([
-        promise,
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('BOX 拼图渲染超时（25s）')), RENDER_TIMEOUT_MS)
-        ),
-      ]);
+    let page = null;
+    let pageClosed = false;
+    let timedOut = false;
+    let timer = null;
 
-    const firstPass = await runWithTimeout(captureWithScale(getPage, html, 1.5, [86, 76, 66, 56]));
-    if (!firstPass.oversized) {
-      return firstPass;
+    const closePageOnce = () => {
+      if (!page || pageClosed) return Promise.resolve();
+      pageClosed = true;
+      return safeClosePage(page);
+    };
+
+    const work = (async () => {
+      const acquired = await getPage();
+      page = acquired;
+      if (timedOut) {
+        await closePageOnce();
+        throw new Error('BOX 拼图渲染超时（页面获取过慢）');
+      }
+      return captureOnPage(acquired, html, { contentTimeoutMs: timeoutMs });
+    })();
+    work.catch(() => {});
+
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        closePageOnce();
+        reject(new Error(`BOX 拼图渲染超时（${Math.round(timeoutMs / 1000)}s）`));
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      clearTimeout(timer);
+      await closePageOnce();
     }
-
-    const secondPass = await runWithTimeout(captureWithScale(getPage, html, 1.0, [74, 62, 52]));
-    return secondPass;
   });
 }
 
 module.exports = {
   MAX_JPEG_BYTES,
+  RENDER_TIMEOUT_MS,
+  escapeHtml,
   buildRenderHtml,
   renderBoxImage,
+  getPendingRenderCount,
+  fileToDataUrl,
+  clearDataUrlCache,
+  getDataUrlCacheSize,
 };

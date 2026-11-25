@@ -14,6 +14,10 @@
   const SUPPORT_ITEM_RE = /^([23])-(\d{1,4})-([0-4])$/;
   const CIDOL_ITEM_RE = /^([a-z0-9]+)-([123])-(\d{1,3})$/;
 
+  function hasOwn(obj, key) {
+    return obj != null && Object.prototype.hasOwnProperty.call(obj, key);
+  }
+
   function base64EncodeAscii(str) {
     if (!str) return '';
     if (typeof Buffer !== 'undefined') {
@@ -87,10 +91,10 @@
       const number = m[2].padStart(4, '0');
       const breakLevel = Number(m[3]);
       const key = `${rarity}-${number}`;
-      if (catalogByKey && !Object.prototype.hasOwnProperty.call(catalogByKey, key)) {
+      if (catalogByKey && !hasOwn(catalogByKey, key)) {
         return { ok: false, error: `目录中不存在支援卡: ${key}` };
       }
-      if (!Object.prototype.hasOwnProperty.call(map, key)) {
+      if (!hasOwn(map, key)) {
         items.push({ key, rarity, number, breakLevel });
       }
       map[key] = breakLevel;
@@ -172,10 +176,10 @@
       const rarity = m[2];
       const number = m[3].padStart(3, '0');
       const key = `${character}-${rarity}-${number}`;
-      if (catalogByKey && !Object.prototype.hasOwnProperty.call(catalogByKey, key)) {
+      if (catalogByKey && !hasOwn(catalogByKey, key)) {
         return { ok: false, error: `目录中不存在P卡: ${key}` };
       }
-      if (!set[key]) {
+      if (!hasOwn(set, key)) {
         set[key] = true;
         items.push({ key, character, rarity, number });
       }
@@ -205,9 +209,25 @@
       return { kind: 'cidol', decoded: cid };
     }
 
+    // 两种解析都失败时，按首个条目形态挑选更贴切的错误信息
+    let firstEntry = '';
+    try {
+      firstEntry =
+        base64DecodeAscii(text)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)[0] || '';
+    } catch (e) {
+      firstEntry = '';
+    }
+    const looksLikeCidol =
+      !SUPPORT_ITEM_RE.test(firstEntry) &&
+      (CIDOL_ITEM_RE.test(firstEntry) || /^[a-z][a-z0-9]*-/i.test(firstEntry));
+    const preferred = looksLikeCidol ? cid.error || sup.error : sup.error || cid.error;
+
     return {
       kind: 'invalid',
-      error: sup.error || cid.error || '无法识别的 BOX 代码格式',
+      error: preferred || '无法识别的 BOX 代码格式',
     };
   }
 
@@ -238,9 +258,7 @@
     let supportOwned = 0;
 
     for (const card of supportCatalog) {
-      const lv = Object.prototype.hasOwnProperty.call(supportMap, card.key)
-        ? supportMap[card.key]
-        : -1;
+      const lv = hasOwn(supportMap, card.key) ? supportMap[card.key] : -1;
       const owned = lv >= 0 && lv <= 4;
       const isMax = lv === 4;
 
@@ -257,7 +275,7 @@
       if (owned) supportOwned += 1;
       if (isMax) maxBreakTotal += 1;
 
-      const attrStat = byAttr[card.attr];
+      const attrStat = hasOwn(byAttr, card.attr) ? byAttr[card.attr] : null;
       if (attrStat) {
         attrStat.total += 1;
         if (owned) attrStat.owned += 1;
@@ -289,7 +307,7 @@
     let cidolROwned = 0;
 
     for (const skin of cidolCatalog) {
-      const owned = !!cidolSet[skin.key];
+      const owned = hasOwn(cidolSet, skin.key) && !!cidolSet[skin.key];
       if (owned) cidolOwned += 1;
       if (skin.rarity === '3') {
         cidolSsrTotal += 1;
@@ -301,10 +319,11 @@
         cidolRTotal += 1;
         if (owned) cidolROwned += 1;
       }
-      if (!charBuckets[skin.character]) {
+      if (!hasOwn(charBuckets, skin.character)) {
         charBuckets[skin.character] = {
           code: skin.character,
-          name: (characters && characters[skin.character]) || skin.character.toUpperCase(),
+          name: (hasOwn(characters, skin.character) && characters[skin.character]) ||
+            String(skin.character).toUpperCase(),
           owned: 0,
           total: 0,
           percent: 0,

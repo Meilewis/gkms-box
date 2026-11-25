@@ -77,6 +77,10 @@
     return ok;
   }
 
+  function hasOwn(obj, key) {
+    return obj != null && Object.prototype.hasOwnProperty.call(obj, key);
+  }
+
   function loadLocalState() {
     try {
       const savedSup = localStorage.getItem(STORAGE_SUPPORT_KEY) || localStorage.getItem(LEGACY_SUPPORT_KEY);
@@ -84,7 +88,7 @@
         const parsed = JSON.parse(savedSup);
         if (parsed && typeof parsed === 'object') {
           Object.entries(parsed).forEach(([k, v]) => {
-            if (state.supportByKey[k] && Number.isInteger(v) && v >= 0 && v <= 4) {
+            if (hasOwn(state.supportByKey, k) && Number.isInteger(v) && v >= 0 && v <= 4) {
               state.supportOwned[k] = v;
             }
           });
@@ -98,7 +102,7 @@
         const parsed = JSON.parse(savedCid);
         if (parsed && typeof parsed === 'object') {
           Object.entries(parsed).forEach(([k, v]) => {
-            if (state.cidolByKey[k] && v) {
+            if (hasOwn(state.cidolByKey, k) && v) {
               state.cidolOwned[k] = true;
             }
           });
@@ -108,11 +112,19 @@
   }
 
   function saveSupportState() {
-    localStorage.setItem(STORAGE_SUPPORT_KEY, JSON.stringify(state.supportOwned));
+    try {
+      localStorage.setItem(STORAGE_SUPPORT_KEY, JSON.stringify(state.supportOwned));
+    } catch {
+      showToast('本地保存失败（浏览器存储受限或空间不足）', 3600);
+    }
   }
 
   function saveCidolState() {
-    localStorage.setItem(STORAGE_CIDOL_KEY, JSON.stringify(state.cidolOwned));
+    try {
+      localStorage.setItem(STORAGE_CIDOL_KEY, JSON.stringify(state.cidolOwned));
+    } catch {
+      showToast('本地保存失败（浏览器存储受限或空间不足）', 3600);
+    }
   }
 
   function getSupportExportString() {
@@ -185,11 +197,12 @@
   }
 
   function escapeHtml(str) {
-    return String(str || '')
+    return String(str ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function renderHeaderActions() {
@@ -287,7 +300,7 @@
             ${c.byCharacter
               .map(
                 (ch) => `
-              <div class="stat-chip clickable ${state.filters.cidolCharacter === ch.code ? 'active-char' : ''}" data-stat-char="${ch.code}">
+              <div class="stat-chip clickable ${state.filters.cidolCharacter === ch.code ? 'active-char' : ''}" data-stat-char="${escapeHtml(ch.code)}">
                 <div class="stat-chip-row">
                   <span class="stat-chip-name">${escapeHtml(ch.name)}</span>
                   <span class="stat-chip-pct">${ch.percent}%</span>
@@ -407,7 +420,7 @@
             ${chars
               .map(
                 ([code, name]) =>
-                  `<button class="f-btn ${f.cidolCharacter === code ? 'active' : ''}" data-c-char="${code}">${escapeHtml(name)}</button>`
+                  `<button class="f-btn ${f.cidolCharacter === code ? 'active' : ''}" data-c-char="${escapeHtml(code)}">${escapeHtml(name)}</button>`
               )
               .join('')}
           </div>
@@ -531,20 +544,20 @@
           const attrUpper = (c.attr || '').toUpperCase();
 
           const mediaHtml = hasImg
-            ? `<img class="card-real-img" loading="lazy" src="./${c.image}" alt="${escapeHtml(c.name)}">`
+            ? `<img class="card-real-img" loading="lazy" src="./${escapeHtml(c.image)}" alt="${escapeHtml(c.name)}">`
             : `<div class="vector-card-art plan-${escapeHtml(c.plan)}">
                  <div class="vector-stripe"></div>
                  <div class="vector-card-title">${escapeHtml(c.name)}</div>
-                 <div class="vector-card-sub">${escapeHtml(c.plan)} · #${c.number}</div>
+                 <div class="vector-card-sub">${escapeHtml(c.plan)} · #${escapeHtml(c.number)}</div>
                </div>`;
 
           return `
-            <div class="s-card-wrap" data-s-card="${c.key}">
-              <div class="s-card-box rarity-${c.rarity} ${lv >= 0 ? 'is-owned' : 'is-unowned'} ${lv === 4 ? 'is-max' : ''}">
+            <div class="s-card-wrap" data-s-card="${escapeHtml(c.key)}">
+              <div class="s-card-box rarity-${escapeHtml(c.rarity)} ${lv >= 0 ? 'is-owned' : 'is-unowned'} ${lv === 4 ? 'is-max' : ''}">
                 ${mediaHtml}
                 <div class="card-badges-top">
-                  <span class="rarity-pill r-${c.rarity}">${c.rarity === '3' ? 'SSR' : 'SR'}</span>
-                  <span class="attr-pill attr-${c.attr}">${attrUpper}</span>
+                  <span class="rarity-pill r-${escapeHtml(c.rarity)}">${c.rarity === '3' ? 'SSR' : 'SR'}</span>
+                  <span class="attr-pill attr-${escapeHtml(c.attr)}">${escapeHtml(attrUpper)}</span>
                 </div>
                 <div class="card-bottom-overlay">
                   <span class="lv-badge ${lv === -1 ? 'off' : lv === 4 ? 'max' : 'on'}">${lvLabel}</span>
@@ -608,7 +621,7 @@
           const hasImg = Boolean(chosenVar && s.images && s.images[chosenVar]);
 
           const mediaHtml = hasImg
-            ? `<img loading="lazy" src="./${s.images[chosenVar]}" alt="${escapeHtml(s.name)}">`
+            ? `<img loading="lazy" src="./${escapeHtml(s.images[chosenVar])}" alt="${escapeHtml(s.name)}">`
             : `<div class="vector-card-art plan-${escapeHtml(s.plan)}">
                  <div class="vector-stripe"></div>
                  <div class="vector-card-title">${escapeHtml(s.name)}</div>
@@ -616,11 +629,11 @@
                </div>`;
 
           return `
-            <div class="c-card ${owned ? 'is-owned' : 'is-unowned'}" data-c-card="${s.key}">
+            <div class="c-card ${owned ? 'is-owned' : 'is-unowned'}" data-c-card="${escapeHtml(s.key)}">
               <div class="c-card-media">
                 ${mediaHtml}
                 <div class="card-badges-top">
-                  <span class="rarity-pill r-${s.rarity}">${s.rarity === '3' ? 'SSR' : s.rarity === '2' ? 'SR' : 'R'}</span>
+                  <span class="rarity-pill r-${escapeHtml(s.rarity)}">${s.rarity === '3' ? 'SSR' : s.rarity === '2' ? 'SR' : 'R'}</span>
                 </div>
                 ${owned ? '<span class="owned-flag">已拥有</span>' : ''}
               </div>
@@ -722,28 +735,48 @@
         if (!res.ok) {
           throw new Error(payload.message || `短码读取失败 (${res.status})`);
         }
-        let msgs = [];
-        if (payload.box) {
-          const decSup = Codec.decodeSupportBox(payload.box, state.supportByKey);
-          if (!decSup.ok) throw new Error(decSup.error);
-          state.supportOwned = decSup.map;
-          saveSupportState();
-          msgs.push(`S卡 ${decSup.items.length} 张`);
+
+        const decSup = payload.box
+          ? Codec.decodeSupportBox(payload.box, state.supportByKey)
+          : { ok: true, items: [], map: {} };
+        if (!decSup.ok) throw new Error(decSup.error);
+
+        const decCid = payload.cidol
+          ? Codec.decodeCidolBox(payload.cidol, state.cidolByKey)
+          : { ok: true, items: [], set: {} };
+        if (!decCid.ok) throw new Error(decCid.error);
+
+        if (decSup.items.length === 0 && decCid.items.length === 0) {
+          throw new Error('该短码中没有任何有效卡片数据');
         }
-        if (payload.cidol) {
-          const decCid = Codec.decodeCidolBox(payload.cidol, state.cidolByKey);
-          if (!decCid.ok) throw new Error(decCid.error);
-          state.cidolOwned = decCid.set;
-          saveCidolState();
-          msgs.push(`P卡 ${decCid.items.length} 项`);
+
+        const hasLocalAny =
+          Object.keys(state.supportOwned).length > 0 || Object.keys(state.cidolOwned).length > 0;
+        if (
+          hasLocalAny &&
+          !confirm('导入短码将用云端完整快照覆盖当前本地的支援卡与角色皮肤记录（未含分区将清空），确定继续吗？')
+        ) {
+          return;
         }
+
+        state.supportOwned = decSup.map;
+        saveSupportState();
+        state.cidolOwned = decCid.set;
+        saveCidolState();
+
         el('importModal').classList.add('hidden');
         renderAll();
-        showToast(`短码导入成功：${msgs.join('、') || '完成'}`);
+        showToast(`短码导入成功：S卡 ${decSup.items.length} 张、P卡 ${decCid.items.length} 项`);
         return;
       }
 
       if (detected.kind === 'support') {
+        if (
+          Object.keys(state.supportOwned).length > 0 &&
+          !confirm('当前已有已勾选的支援卡，导入将覆盖现有支援卡记录，确定继续吗？')
+        ) {
+          return;
+        }
         state.supportOwned = detected.decoded.map;
         saveSupportState();
         state.activeTab = 'support';
@@ -754,6 +787,12 @@
       }
 
       if (detected.kind === 'cidol') {
+        if (
+          Object.keys(state.cidolOwned).length > 0 &&
+          !confirm('当前已有已勾选的角色与皮肤，导入将覆盖现有角色皮肤记录，确定继续吗？')
+        ) {
+          return;
+        }
         state.cidolOwned = detected.decoded.set;
         saveCidolState();
         state.activeTab = 'cidol';
@@ -846,7 +885,11 @@
         const imgSrc = card ? `./assets/cards/s_card-${card.rarity}-${card.number}.webp` : '';
         const pctSim = Math.round((item.rawSim || 0) * 100);
         const pillClass = item.needsReview ? 'warn' : 'ok';
-        const pillLabel = item.needsReview ? `建议核对 ${pctSim}%` : `匹配 ${pctSim}%`;
+        const pillLabel = item.conflict
+          ? `位置冲突待核对 ${pctSim}%`
+          : item.needsReview
+            ? `建议核对 ${pctSim}%`
+            : `匹配 ${pctSim}%`;
 
         const candOptions = (item.candidates || [])
           .map((c) => {
@@ -872,9 +915,9 @@
                 <input type="checkbox" data-shot-toggle="${idx}" ${item.enabled ? 'checked' : ''}>
                 <span>${escapeHtml(rarityTag)} ${escapeHtml(attrTag)}</span>
               </label>
-              <span class="shot-conf-pill ${pillClass}">${pillLabel}</span>
+              <span class="shot-conf-pill ${pillClass}">${escapeHtml(pillLabel)}</span>
             </div>
-            ${imgSrc ? `<img class="shot-thumb" src="${imgSrc}" alt="${escapeHtml(cardName)}" loading="lazy">` : ''}
+            ${imgSrc ? `<img class="shot-thumb" src="${escapeHtml(imgSrc)}" alt="${escapeHtml(cardName)}" loading="lazy">` : ''}
             <div class="shot-card-name" title="${escapeHtml(cardName)}">${escapeHtml(cardName)}</div>
             <div class="shot-lv-row">${lvBtns}</div>
             ${candOptions ? `<select class="shot-cand-select" data-shot-cand="${idx}" title="识别偏差时可点此切换候选卡">${candOptions}</select>` : ''}
@@ -922,6 +965,7 @@
         if (!item) return;
         item.key = sel.value;
         item.needsReview = false;
+        item.conflict = false;
         item.enabled = true;
         const scrollTop = el('screenshotModal').querySelector('.modal-body').scrollTop;
         renderShotResults();
@@ -933,7 +977,7 @@
   }
 
   async function processShotFiles(fileList) {
-    const files = Array.from(fileList || []).filter((f) => f && /^image\//i.test(f.type || 'image/'));
+    const files = Array.from(fileList || []).filter((f) => f && (!f.type || /^image\//i.test(f.type)));
     if (!files.length || state.shotBusy) return;
 
     const progressEl = el('shotProgress');
@@ -947,25 +991,34 @@
     try {
       const db = await ensureFingerprintDb();
       const allDetections = [];
+      const fileStatuses = [];
       let validFiles = 0;
 
       for (let i = 0; i < files.length; i += 1) {
         const file = files[i];
         progressEl.textContent = `正在本地识别第 ${i + 1} / ${files.length} 张截图（长图自动分带扫描）：${file.name}...`;
         await new Promise((r) => setTimeout(r, 16));
-        const img = await loadImageFile(file);
-        const res = ScreenshotImporter.scanImageElement(img, db, state.supportByKey, {
-          sourceName: file.name,
-        });
-        if (res.detections.length > 0) {
-          validFiles += 1;
-          allDetections.push(...res.detections);
+        try {
+          const img = await loadImageFile(file);
+          const res = ScreenshotImporter.scanImageElement(img, db, state.supportByKey, {
+            sourceName: file.name,
+          });
+          if (res.detections.length > 0) {
+            validFiles += 1;
+            allDetections.push(...res.detections);
+            fileStatuses.push(`${file.name}（命中 ${res.detections.length} 格）`);
+          } else {
+            fileStatuses.push(`${file.name}（未检测到网格）`);
+          }
+        } catch (fileErr) {
+          const reason = fileErr && fileErr.message ? fileErr.message : String(fileErr);
+          fileStatuses.push(`${file.name}（失败：${reason}）`);
         }
       }
 
       if (allDetections.length === 0) {
         throw new Error(
-          '未能从所选图片中检测到「支援卡一览」的 3 列卡池网格。请确认上传的是游戏内支援卡列表截图（支持长图与分段截图，暂不支持 P 卡截图）。'
+          `未能从所选图片中检测到「支援卡一览」的 3 列卡池网格。请使用竖屏手机截取的「支援卡一览」界面（支持长图与分段截图，暂不支持横屏、iPad、深色界面或 P 卡截图）。文件状态：${fileStatuses.join('；')}`
         );
       }
 
@@ -977,7 +1030,7 @@
       }));
 
       progressEl.textContent =
-        `识别完成：共读取 ${files.length} 张图片（${validFiles} 张有效命中），累计扫描 ${merged.totalScannedCards} 格，去重后得到 ${merged.uniqueCount} 张支援卡。`;
+        `识别完成：共读取 ${files.length} 张图片（${validFiles} 张有效命中），累计扫描 ${merged.totalScannedCards} 格，去重后得到 ${merged.uniqueCount} 张支援卡。明细：${fileStatuses.join('；')}`;
       renderShotResults();
     } catch (err) {
       errEl.textContent = err && err.message ? err.message : String(err);
@@ -1016,10 +1069,40 @@
     btn.textContent = '正在生成长图...';
 
     try {
-      const supportList = getFilteredSupportCards().filter((c) =>
-        Object.prototype.hasOwnProperty.call(state.supportOwned, c.key)
-      );
-      const cidolList = getFilteredCidolSkins().filter((s) => !!state.cidolOwned[s.key]);
+      const allOwnedSupport = state.supportCatalog.filter((c) => hasOwn(state.supportOwned, c.key));
+      const charOrder = Object.keys(state.characters);
+      const allOwnedCidol = state.cidolCatalog
+        .filter((s) => hasOwn(state.cidolOwned, s.key) && !!state.cidolOwned[s.key])
+        .sort((a, b) => {
+          const ia = charOrder.indexOf(a.character);
+          const ib = charOrder.indexOf(b.character);
+          return (
+            (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) ||
+            Number(b.rarity) - Number(a.rarity) ||
+            b.number.localeCompare(a.number)
+          );
+        });
+
+      const filteredSupport = getFilteredSupportCards().filter((c) => hasOwn(state.supportOwned, c.key));
+      const filteredCidol = getFilteredCidolSkins().filter((s) => !!state.cidolOwned[s.key]);
+
+      const exportSupportList =
+        mode === 'cidol'
+          ? []
+          : mode === 'all'
+            ? allOwnedSupport
+            : filteredSupport.length
+              ? filteredSupport
+              : allOwnedSupport;
+      const exportCidolList =
+        mode === 'support'
+          ? []
+          : mode === 'all'
+            ? allOwnedCidol
+            : filteredCidol.length
+              ? filteredCidol
+              : allOwnedCidol;
+
       const summary = Codec.summarizeBox({
         supportMap: state.supportOwned,
         cidolSet: state.cidolOwned,
@@ -1030,9 +1113,9 @@
 
       const dataUrl = await CanvasExport.renderSummaryCanvas({
         mode,
-        supportList: mode === 'cidol' ? [] : supportList.length ? supportList : state.supportCatalog.filter((c) => Object.prototype.hasOwnProperty.call(state.supportOwned, c.key)),
+        supportList: exportSupportList,
         supportMap: state.supportOwned,
-        cidolList: mode === 'support' ? [] : cidolList.length ? cidolList : state.cidolCatalog.filter((s) => !!state.cidolOwned[s.key]),
+        cidolList: exportCidolList,
         characters: state.characters,
         cidolVariant: state.filters.cidolVariant,
         manifest: state.manifest,
