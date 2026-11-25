@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 本地学马仕卡面图片一键导入、转 WebP 压缩与 asset-manifest.json 清单生成脚本。
+支持按游戏资产编号（s_card-* / csprt-* / cidol-*）以及按日文卡名自动识别匹配；
 图数分离设计：未导入图片时前后端自动显示高颜值占位卡；放入图片并运行本脚本后立即自动启用高清卡面。
 """
 
@@ -11,9 +12,10 @@ import json
 import re
 import shutil
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from PIL import Image, ImageOps
 
@@ -28,10 +30,64 @@ CIDOL_RE = re.compile(
 OUT_SUPPORT_RE = re.compile(r"^s_card-([23])-(\d{4})\.webp$")
 OUT_CIDOL_RE = re.compile(r"^cidol-([a-z0-9]+-[123]-\d{3})_([01])\.webp$")
 
+LOOSE_STRIP_RE = re.compile(r'[\\/:*?"<>|！？!?,、。・…\s_~～♪「」『』()（）\-－—]+')
 
-def classify_image_name(stem: str) -> Tuple[str, str] | None:
+
+def normalize_card_name(name: str) -> Tuple[str, str]:
+    """返回 (NFKC 规范名, 去除标点与空白的宽松名)。"""
+    s = unicodedata.normalize("NFKC", str(name or "")).replace("\u3000", " ").strip()
+    loose = LOOSE_STRIP_RE.sub("", s).lower()
+    return s, loose
+
+
+def build_name_index(catalog_dirs: List[Path]) -> Dict[str, Dict[str, List[Tuple[str, str]]]]:
+    """从卡池 JSON 目录构建唯一卡名索引（支持支援卡与 P 卡按卡名匹配）。"""
+    support_rows: List[Dict[str, Any]] = []
+    cidol_rows: List[Dict[str, Any]] = []
+
+    for d in catalog_dirs:
+        sp = d / "data" / "support.json"
+        if sp.is_file() and not support_rows:
+            support_rows = json.loads(sp.read_text(encoding="utf-8"))
+        cp = d / "data" / "cidol.json"
+        if cp.is_file() and not cidol_rows:
+            cidol_rows = json.loads(cp.read_text(encoding="utf-8"))
+
+    exact_map: Dict[str, List[Tuple[str, str]]] = {}
+    loose_map: Dict[str, List[Tuple[str, str]]] = {}
+
+    for c in support_rows:
+        rarity = c.get("rarity")
+        number = str(c.get("number", "")).zfill(4)
+        if not rarity or not number:
+            continue
+        target = ("support", f"cards/s_card-{rarity}-{number}.webp")
+        ex, lo = normalize_card_name(c.get("name", ""))
+        if ex:
+            exact_map.setdefault(ex, []).append(target)
+        if lo:
+            loose_map.setdefault(lo, []).append(target)
+
+    for s in cidol_rows:
+        key = s.get("key")
+        if not key:
+            continue
+        target = ("cidol", f"cidol/cidol-{key}_1.webp")
+        ex, lo = normalize_card_name(s.get("name", ""))
+        if ex:
+            exact_map.setdefault(ex, []).append(target)
+        if lo:
+            loose_map.setdefault(lo, []).append(target)
+
+    return {"exact": exact_map, "loose": loose_map}
+
+
+def classify_image_name(
+    stem: str,
+    name_index: Dict[str, Dict[str, List[Tuple[str, str]]]] | None = None,
+) -> Tuple[str, str] | None:
     """
-    识别常见游戏导出文件名并归一化为标准相对路径。
+    识别常见游戏导出文件名（资产编号或日文卡名）并归一化为标准相对路径。
     返回: ('support' | 'cidol', 'cards/s_card-3-0001.webp' | 'cidol/cidol-amao-3-000_1.webp')
     """
     m_sup = SUPPORT_RE.search(stem)
@@ -47,6 +103,15 @@ def classify_image_name(stem: str) -> Tuple[str, str] | None:
         number = m_cid.group(3).zfill(3)
         variant = m_cid.group(4) if m_cid.group(4) in ("0", "1") else "1"
         return ("cidol", f"cidol/cidol-{char_code}-{rarity}-{number}_{variant}.webp")
+
+    if name_index:
+        ex, lo = normalize_card_name(stem)
+        exact_hits = name_index["exact"].get(ex, [])
+        if len(exact_hits) == 1:
+            return exact_hits[0]
+        loose_hits = name_index["loose"].get(lo, [])
+        if len(loose_hits) == 1:
+            return loose_hits[0]
 
     return None
 
@@ -145,6 +210,9 @@ def import_assets(
         (td / "assets" / "cards").mkdir(parents=True, exist_ok=True)
         (td / "assets" / "cidol").mkdir(parents=True, exist_ok=True)
 
+    root_dir = Path(__file__).resolve().parent.parent
+    name_index = build_name_index(target_dirs + [root_dir / "web" / "public", root_dir / "koishi-plugin"])
+
     if not manifest_only:
         if source_dir is None or not source_dir.is_dir():
             raise FileNotFoundError(f"图片源目录不存在: {source_dir}")
@@ -153,7 +221,7 @@ def import_assets(
             if not src.is_file() or src.suffix.lower() not in IMAGE_EXTS:
                 continue
             stats["scanned"] += 1
-            classified = classify_image_name(src.stem)
+            classified = classify_image_name(src.stem, name_index=name_index)
             if not classified:
                 stats["skipped"] += 1
                 continue

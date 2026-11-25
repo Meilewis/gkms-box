@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
-web/public/assets/
 koishi-plugin/assets/
 koishi-plugin/data/bindings.db
 *.tmp
