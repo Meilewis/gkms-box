@@ -45,6 +45,12 @@ const Config = Schema.object({
   cooldownSeconds: Schema.natural()
     .default(20)
     .description('每人连续查box/晒box拼图冷却秒数（防刷图拖慢响应）'),
+  bindSuccessRecallSeconds: Schema.natural()
+    .default(30)
+    .description('BOX 绑定成功提示发出后自动撤回的秒数（0 表示不自动撤回；QQ 官方限制须在 120 秒内）'),
+  boxQueryRecallSeconds: Schema.natural()
+    .default(30)
+    .description('查box/晒box 拼图发出后自动撤回的秒数（0 表示不自动撤回；QQ 官方限制须在 120 秒内）'),
   botDisplayName: Schema.string()
     .default('Bot')
     .description('提示文案中显示的机器人名称'),
@@ -112,20 +118,38 @@ function extractPlainText(session) {
   return fallback.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function extractTargetMention(session) {
-  if (!Array.isArray(session.elements)) return null;
-  for (const el of session.elements) {
+function findOtherAtElement(nodes, selfId) {
+  if (!Array.isArray(nodes)) return null;
+  for (const el of nodes) {
+    if (!el) continue;
     if (
-      el &&
       el.type === 'at' &&
       el.attrs &&
       el.attrs.id &&
-      String(el.attrs.id) !== String(session.selfId || '')
+      String(el.attrs.id) !== String(selfId || '')
     ) {
       return {
         id: String(el.attrs.id),
         name: el.attrs.name ? String(el.attrs.name) : '',
       };
+    }
+    if (Array.isArray(el.children)) {
+      const nested = findOtherAtElement(el.children, selfId);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function extractTargetMention(session) {
+  if (!session || typeof session !== 'object') return null;
+  const fromEls = findOtherAtElement(session.elements, session.selfId);
+  if (fromEls) return fromEls;
+  if (typeof session.content === 'string' && session.content.includes('<at')) {
+    try {
+      return findOtherAtElement(h.parse(session.content), session.selfId);
+    } catch (_) {
+      return null;
     }
   }
   return null;
@@ -188,8 +212,8 @@ function buildHelpMessage(config, catalog) {
     '可用指令：',
     `1. @${bot} 绑定 — 获取网页链接与使用说明`,
     `2. @${bot} 绑定+代码 — 绑定/更新你的 BOX（例如：@${bot} 绑定 g12345678）`,
-    `3. @${bot} 查box / 晒box — 生成你的持卡统计与拼图`,
-    `4. @${bot} 查box 支援卡 / P卡 / 筱泽广 — 按分类或偶像晒图（也可 @群友 看对方 BOX）`,
+    `3. @${bot} 查box / 晒box — 生成自己的持卡统计与拼图（30 秒后自动撤回）`,
+    `4. @${bot} 查box 支援卡 / P卡 / 筱泽广 — 按分类或偶像查看自己的 BOX（仅支持查自己）`,
     `5. @${bot} 解绑box — 清除已绑定的数据`,
     '',
     `当前收录：支援卡 ${catalog.support.length} 张 · P卡与皮肤 ${catalog.cidol.length} 项`,
@@ -259,6 +283,67 @@ async function fetchShortBindRecord(apiBase, code) {
   }
 
   throw lastErr || new Error(`读取短码 ${code} 失败`);
+}
+
+/**
+ * 主动发送消息并在指定秒数后自动撤回（仅在拿到 messageId 且适配器支持 deleteMessage 时调度）
+ */
+async function sendAndAutoRecall(ctx, session, payload, recallSeconds, logger, label = '消息') {
+  const delaySec = Number(recallSeconds) || 0;
+  if (
+    delaySec <= 0 ||
+    !session ||
+    typeof session.send !== 'function' ||
+    !session.bot ||
+    typeof session.bot.deleteMessage !== 'function'
+  ) {
+    return payload;
+  }
+
+  let sentIds;
+  try {
+    sentIds = await session.send(payload);
+  } catch (err) {
+    if (logger && typeof logger.warn === 'function') {
+      logger.warn('发送%s异常，回退默认返回：%s', label, err && err.message ? err.message : err);
+    }
+    return payload;
+  }
+
+  const ids = Array.isArray(sentIds) ? sentIds.filter(Boolean) : [];
+  const channelId = session.channelId || '';
+  if (!ids.length || !channelId) {
+    if (logger && typeof logger.warn === 'function') {
+      logger.warn('%s未拿到 messageId 或 channelId，跳过自动撤回', label);
+    }
+    return undefined;
+  }
+
+  const schedule = (fn, ms) =>
+    ctx && typeof ctx.setTimeout === 'function' ? ctx.setTimeout(fn, ms) : setTimeout(fn, ms);
+
+  schedule(async () => {
+    for (const msgId of ids) {
+      try {
+        await session.bot.deleteMessage(channelId, msgId);
+        if (logger && typeof logger.info === 'function') {
+          logger.info('已自动撤回%s msgId=%s channel=%s (delay=%ss)', label, msgId, channelId, delaySec);
+        }
+      } catch (err) {
+        if (logger && typeof logger.warn === 'function') {
+          logger.warn(
+            '自动撤回%s失败 msgId=%s channel=%s: %s',
+            label,
+            msgId,
+            channelId,
+            err && err.message ? err.message : err
+          );
+        }
+      }
+    }
+  }, delaySec * 1000);
+
+  return undefined;
 }
 
 function apply(ctx, config) {
@@ -431,27 +516,34 @@ function apply(ctx, config) {
         },
       ]);
 
-      return (
+      const bindSuccessText =
         `BOX 绑定成功（本次更新：${updatedParts.join('、')}）！\n` +
         `当前存档：支援卡 ${nextSupportCount} 张 · P卡与皮肤 ${nextCidolCount} 项\n` +
-        `发送「@${botName} 查box」即可生成你的汇总拼图。`
+        `发送「@${botName} 查box」即可生成你的汇总拼图。`;
+      return await sendAndAutoRecall(
+        ctx,
+        session,
+        bindSuccessText,
+        config.bindSuccessRecallSeconds,
+        logger,
+        'BOX 绑定成功提示'
       );
     }
 
     if (queryMatch) {
+      const rawQueryArg = queryMatch[1] || '';
       const targetAt = extractTargetMention(session);
-      const targetUserKey = targetAt ? `${platform}:${targetAt.id}` : userKey;
-      const isSelf = targetUserKey === userKey;
-      const ownerLabel = isSelf
-        ? (session.author && (session.author.nick || session.author.name)) ||
-          (session.username || '当前制作人')
-        : targetAt.name || `制作人(${targetAt.id.slice(-4)})`;
+      if ((targetAt && String(targetAt.id) !== String(userId)) || /@\S+/.test(rawQueryArg)) {
+        return '为了保护隐私，仅支持查询自己的 BOX，不支持 @群友 查看对方的 BOX 哦。';
+      }
 
-      const rows = await ctx.database.get('gkms_box_binding', { userKey: targetUserKey });
+      const ownerLabel =
+        (session.author && (session.author.nick || session.author.name)) ||
+        (session.username || '当前制作人');
+
+      const rows = await ctx.database.get('gkms_box_binding', { userKey });
       if (!rows.length) {
-        return isSelf
-          ? `你还没有绑定 BOX 哦，请先发送「@${botName} 绑定」查看教程或「@${botName} 绑定 <代码>」完成绑定。`
-          : '这位群友还没有绑定过 BOX 哦。';
+        return `你还没有绑定 BOX 哦，请先发送「@${botName} 绑定」查看教程或「@${botName} 绑定 <代码>」完成绑定。`;
       }
 
       const binding = rows[0];
@@ -460,7 +552,7 @@ function apply(ctx, config) {
       const supportMap = decSup.ok ? decSup.map : {};
       const cidolSet = decCid.ok ? decCid.set : {};
 
-      const { mode, character } = parseQueryArgs(queryMatch[1] || '', catalog.characters);
+      const { mode, character } = parseQueryArgs(rawQueryArg, catalog.characters);
 
       const supportItems = (decSup.ok ? decSup.items : [])
         .map((it) => ({ card: catalog.supportByKey[it.key], breakLevel: it.breakLevel }))
@@ -538,17 +630,25 @@ function apply(ctx, config) {
         logger.info(
           '[%s] 拼图完成 user=%s mode=%s size=%d bytes (q=%d, scale=%s)',
           userKey,
-          targetUserKey,
+          userKey,
           mode,
           rendered.buffer.length,
           rendered.quality,
           rendered.scale
         );
 
-        return [
+        const queryPayload = [
           h.text(`${summaryText}\n`),
           h.image(rendered.buffer, 'image/jpeg', { title: 'gkms_box.jpg' }),
         ];
+        return await sendAndAutoRecall(
+          ctx,
+          session,
+          queryPayload,
+          config.boxQueryRecallSeconds,
+          logger,
+          '查box 拼图'
+        );
       } catch (err) {
         logger.error('BOX 拼图渲染失败：%s', err && err.stack ? err.stack : err);
         return `${summaryText}\n\n（拼图生成暂时失败，已为你先返回文字统计）`;
@@ -572,4 +672,5 @@ module.exports = {
   resolveCharacterFilter,
   parseQueryArgs,
   formatSummaryText,
+  sendAndAutoRecall,
 };

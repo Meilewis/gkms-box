@@ -8,6 +8,7 @@
 
   const Codec = window.GkmsCodec;
   const CanvasExport = window.GkmsCanvasExport;
+  const ScreenshotImporter = window.GkmsScreenshotImporter;
 
   const state = {
     activeTab: 'support',
@@ -34,6 +35,10 @@
       cidolQuery: '',
     },
     shortBusy: false,
+    fingerprintDb: null,
+    shotBusy: false,
+    shotItems: [],
+    shotScannedFiles: 0,
     toastTimer: null,
   };
 
@@ -486,7 +491,7 @@
 
     if (state.activeTab === 'support') {
       tip.innerHTML =
-        `操作提示：点击卡片 <strong>左半边</strong> 降级，<strong>右半边</strong> 升级；或点卡片下方快捷等级按钮（再点一次已激活等级可取消持有）。${imgStatus}`;
+        `操作提示：点击卡片 <strong>左半边</strong> 降级，<strong>右半边</strong> 升级；或点上方「📷 截图导入 S卡」（支持长图与分段截图）。${imgStatus}`;
     } else {
       tip.innerHTML = `操作提示：点击角色卡即可切换持有状态，点顶部统计条中的偶像名可快速筛出该角色。${imgStatus}`;
     }
@@ -765,6 +770,245 @@
     }
   }
 
+  function resetScreenshotModalState() {
+    state.shotItems = [];
+    state.shotScannedFiles = 0;
+    el('shotFileInput').value = '';
+    el('shotProgress').classList.add('hidden');
+    el('shotProgress').textContent = '';
+    el('shotError').classList.add('hidden');
+    el('shotError').textContent = '';
+    el('shotReviewSection').classList.add('hidden');
+    el('shotResultGrid').innerHTML = '';
+    el('btnClearShots').classList.add('hidden');
+    el('btnConfirmShotImport').disabled = true;
+    el('btnConfirmShotImport').textContent = '确认导入支援卡';
+  }
+
+  async function ensureFingerprintDb() {
+    if (state.fingerprintDb) return state.fingerprintDb;
+    if (!ScreenshotImporter) {
+      throw new Error('截图识别模块未能加载，请刷新页面后重试。');
+    }
+    const payload = await fetchJsonSafe('./data/support-fingerprints.json');
+    state.fingerprintDb = ScreenshotImporter.decodeFingerprintDb(payload);
+    return state.fingerprintDb;
+  }
+
+  function loadImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error(`无法读取图片文件：${file.name}`));
+      };
+      img.src = url;
+    });
+  }
+
+  function updateShotConfirmButton() {
+    const enabledCount = state.shotItems.filter((it) => it.enabled).length;
+    const btn = el('btnConfirmShotImport');
+    btn.disabled = state.shotBusy || enabledCount === 0;
+    btn.textContent = enabledCount > 0 ? `确认导入 ${enabledCount} 张支援卡` : '确认导入支援卡';
+  }
+
+  function renderShotResults() {
+    const reviewSection = el('shotReviewSection');
+    const summaryEl = el('shotSummaryText');
+    const grid = el('shotResultGrid');
+
+    if (!state.shotItems.length) {
+      reviewSection.classList.add('hidden');
+      updateShotConfirmButton();
+      return;
+    }
+
+    reviewSection.classList.remove('hidden');
+    el('btnClearShots').classList.remove('hidden');
+
+    const reviewCount = state.shotItems.filter((it) => it.needsReview).length;
+    const warnHtml = reviewCount > 0 ? `<span class="warn-badge">${reviewCount} 张建议核对</span>` : '';
+    summaryEl.innerHTML =
+      `已扫描 <strong>${state.shotScannedFiles}</strong> 张截图，识别到 <strong>${state.shotItems.length}</strong> 张支援卡（已自动去重合并）${warnHtml}`;
+
+    grid.innerHTML = state.shotItems
+      .map((item, idx) => {
+        const card = state.supportByKey[item.key];
+        const cardName = card ? card.name : item.key;
+        const rarityTag = card ? (card.rarity === '3' ? 'SSR' : 'SR') : '';
+        const attrTag = card ? card.attr.toUpperCase() : '';
+        const imgSrc = card ? `./assets/cards/s_card-${card.rarity}-${card.number}.webp` : '';
+        const pctSim = Math.round((item.rawSim || 0) * 100);
+        const pillClass = item.needsReview ? 'warn' : 'ok';
+        const pillLabel = item.needsReview ? `建议核对 ${pctSim}%` : `匹配 ${pctSim}%`;
+
+        const candOptions = (item.candidates || [])
+          .map((c) => {
+            const cCard = state.supportByKey[c.key];
+            const cLabel = cCard
+              ? `${cCard.rarity === '3' ? 'SSR' : 'SR'} · ${cCard.name} (${Math.round(c.rawSim * 100)}%)`
+              : c.key;
+            return `<option value="${escapeHtml(c.key)}" ${c.key === item.key ? 'selected' : ''}>${escapeHtml(cLabel)}</option>`;
+          })
+          .join('');
+
+        const lvBtns = [0, 1, 2, 3, 4]
+          .map(
+            (lv) =>
+              `<button type="button" class="shot-lv-btn ${item.breakLevel === lv ? 'active' : ''}" data-shot-idx="${idx}" data-shot-lv="${lv}">${lv}破</button>`
+          )
+          .join('');
+
+        return `
+          <div class="shot-item ${item.needsReview ? 'is-review' : ''} ${item.enabled ? '' : 'is-disabled'}" data-shot-card="${idx}">
+            <div class="shot-item-head">
+              <label class="shot-check-label">
+                <input type="checkbox" data-shot-toggle="${idx}" ${item.enabled ? 'checked' : ''}>
+                <span>${escapeHtml(rarityTag)} ${escapeHtml(attrTag)}</span>
+              </label>
+              <span class="shot-conf-pill ${pillClass}">${pillLabel}</span>
+            </div>
+            ${imgSrc ? `<img class="shot-thumb" src="${imgSrc}" alt="${escapeHtml(cardName)}" loading="lazy">` : ''}
+            <div class="shot-card-name" title="${escapeHtml(cardName)}">${escapeHtml(cardName)}</div>
+            <div class="shot-lv-row">${lvBtns}</div>
+            ${candOptions ? `<select class="shot-cand-select" data-shot-cand="${idx}" title="识别偏差时可点此切换候选卡">${candOptions}</select>` : ''}
+          </div>
+        `;
+      })
+      .join('');
+
+    grid.querySelectorAll('[data-shot-toggle]').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const idx = Number(cb.getAttribute('data-shot-toggle'));
+        if (!state.shotItems[idx]) return;
+        state.shotItems[idx].enabled = cb.checked;
+        const cardEl = grid.querySelector(`[data-shot-card="${idx}"]`);
+        if (cardEl) cardEl.classList.toggle('is-disabled', !cb.checked);
+        updateShotConfirmButton();
+      });
+    });
+
+    grid.querySelectorAll('[data-shot-lv]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-shot-idx'));
+        const lv = Number(btn.getAttribute('data-shot-lv'));
+        const item = state.shotItems[idx];
+        if (!item) return;
+        item.breakLevel = lv;
+        item.enabled = true;
+        const cardEl = grid.querySelector(`[data-shot-card="${idx}"]`);
+        if (cardEl) {
+          cardEl.classList.remove('is-disabled');
+          const chk = cardEl.querySelector(`[data-shot-toggle="${idx}"]`);
+          if (chk) chk.checked = true;
+          cardEl.querySelectorAll('.shot-lv-btn').forEach((b) => {
+            b.classList.toggle('active', Number(b.getAttribute('data-shot-lv')) === lv);
+          });
+        }
+        updateShotConfirmButton();
+      });
+    });
+
+    grid.querySelectorAll('[data-shot-cand]').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const idx = Number(sel.getAttribute('data-shot-cand'));
+        const item = state.shotItems[idx];
+        if (!item) return;
+        item.key = sel.value;
+        item.needsReview = false;
+        item.enabled = true;
+        const scrollTop = el('screenshotModal').querySelector('.modal-body').scrollTop;
+        renderShotResults();
+        el('screenshotModal').querySelector('.modal-body').scrollTop = scrollTop;
+      });
+    });
+
+    updateShotConfirmButton();
+  }
+
+  async function processShotFiles(fileList) {
+    const files = Array.from(fileList || []).filter((f) => f && /^image\//i.test(f.type || 'image/'));
+    if (!files.length || state.shotBusy) return;
+
+    const progressEl = el('shotProgress');
+    const errEl = el('shotError');
+    state.shotBusy = true;
+    errEl.classList.add('hidden');
+    progressEl.classList.remove('hidden');
+    progressEl.textContent = '正在加载支援卡特征指纹库（仅首次需要）...';
+    el('btnConfirmShotImport').disabled = true;
+
+    try {
+      const db = await ensureFingerprintDb();
+      const allDetections = [];
+      let validFiles = 0;
+
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i];
+        progressEl.textContent = `正在本地识别第 ${i + 1} / ${files.length} 张截图（长图自动分带扫描）：${file.name}...`;
+        await new Promise((r) => setTimeout(r, 16));
+        const img = await loadImageFile(file);
+        const res = ScreenshotImporter.scanImageElement(img, db, state.supportByKey, {
+          sourceName: file.name,
+        });
+        if (res.detections.length > 0) {
+          validFiles += 1;
+          allDetections.push(...res.detections);
+        }
+      }
+
+      if (allDetections.length === 0) {
+        throw new Error(
+          '未能从所选图片中检测到「支援卡一览」的 3 列卡池网格。请确认上传的是游戏内支援卡列表截图（支持长图与分段截图，暂不支持 P 卡截图）。'
+        );
+      }
+
+      const merged = ScreenshotImporter.mergeRecognizedDetections(allDetections, state.supportByKey);
+      state.shotScannedFiles = files.length;
+      state.shotItems = merged.items.map((it) => ({
+        ...it,
+        enabled: true,
+      }));
+
+      progressEl.textContent =
+        `识别完成：共读取 ${files.length} 张图片（${validFiles} 张有效命中），累计扫描 ${merged.totalScannedCards} 格，去重后得到 ${merged.uniqueCount} 张支援卡。`;
+      renderShotResults();
+    } catch (err) {
+      errEl.textContent = err && err.message ? err.message : String(err);
+      errEl.classList.remove('hidden');
+      progressEl.classList.add('hidden');
+    } finally {
+      state.shotBusy = false;
+      updateShotConfirmButton();
+    }
+  }
+
+  function handleConfirmShotImport() {
+    const selected = state.shotItems.filter((it) => it.enabled && state.supportByKey[it.key]);
+    if (!selected.length) return;
+
+    const modeRadio = document.querySelector('input[name="shotImportMode"]:checked');
+    const mode = modeRadio ? modeRadio.value : 'merge';
+    const nextOwned = mode === 'replace' ? {} : { ...state.supportOwned };
+
+    for (const item of selected) {
+      nextOwned[item.key] = item.breakLevel;
+    }
+
+    state.supportOwned = nextOwned;
+    saveSupportState();
+    state.activeTab = 'support';
+    el('screenshotModal').classList.add('hidden');
+    renderAll();
+    showToast(`已从截图导入 ${selected.length} 张支援卡！点击“生成并复制 9 位短码”即可发给 QQ 机器人绑定`, 3400);
+  }
+
   async function handleExportImage(mode) {
     const btn = mode === 'all' ? el('btnExportAllImg') : el('btnExportCurrentImg');
     const oldHtml = btn.innerHTML;
@@ -848,6 +1092,39 @@
       el('importTextarea').focus();
     });
     el('btnConfirmImport').addEventListener('click', handleImport);
+
+    el('btnOpenScreenshotImport').addEventListener('click', () => {
+      resetScreenshotModalState();
+      el('screenshotModal').classList.remove('hidden');
+    });
+    el('btnPickShots').addEventListener('click', (e) => {
+      e.stopPropagation();
+      el('shotFileInput').click();
+    });
+    el('shotDropZone').addEventListener('click', () => {
+      el('shotFileInput').click();
+    });
+    el('shotDropZone').addEventListener('dragover', (e) => {
+      e.preventDefault();
+      el('shotDropZone').classList.add('is-dragover');
+    });
+    el('shotDropZone').addEventListener('dragleave', () => {
+      el('shotDropZone').classList.remove('is-dragover');
+    });
+    el('shotDropZone').addEventListener('drop', (e) => {
+      e.preventDefault();
+      el('shotDropZone').classList.remove('is-dragover');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        processShotFiles(e.dataTransfer.files);
+      }
+    });
+    el('shotFileInput').addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length) {
+        processShotFiles(e.target.files);
+      }
+    });
+    el('btnClearShots').addEventListener('click', resetScreenshotModalState);
+    el('btnConfirmShotImport').addEventListener('click', handleConfirmShotImport);
 
     el('btnResetCurrent').addEventListener('click', () => {
       if (state.activeTab === 'support') {

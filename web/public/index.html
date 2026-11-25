@@ -16,7 +16,7 @@
         <div class="brand-badge">GAKUEN IDOLMASTER • BOX STUDIO</div>
         <h1>学园偶像大师 BOX 共享工具</h1>
         <p class="subtitle">
-          离线可用 · 零外部依赖 · 点击卡片录入持卡，支持生成长图与 QQ 机器人绑定短码
+          离线可用 · 零外部依赖 · 支持点击录入、支援卡截图导入（支持长图与分段截图）与 QQ 机器人绑定短码
           <span id="metaSummary" class="meta-pill">正在加载卡池目录...</span>
         </p>
       </div>
@@ -37,6 +37,7 @@
           <button id="btnShortCode" class="btn btn-gold" disabled>
             生成并复制 9 位短码 (g########)
           </button>
+          <button id="btnOpenScreenshotImport" class="btn btn-emerald">📷 截图导入 S卡</button>
           <button id="btnOpenImport" class="btn btn-ghost">导入代码 / 短码</button>
           <button id="btnResetCurrent" class="btn btn-danger-soft">清空当前页</button>
         </div>
@@ -116,6 +117,59 @@
     </div>
   </div>
 
+  <!-- 截图导入支援卡弹窗 -->
+  <div id="screenshotModal" class="modal-backdrop hidden">
+    <div class="modal-card modal-card-wide glass-panel">
+      <div class="modal-header">
+        <h3>📷 截图导入支援卡（S卡）</h3>
+        <button class="modal-close" data-close-modal="screenshotModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="shot-notice">
+          <div class="shot-notice-title">支持长图与分段截图 · 仅支持支援卡（暂不支持 P 卡）</div>
+          <ul class="shot-notice-list">
+            <li><strong>支持手机拼接长图与多张分段截图批量上传</strong>：在游戏「支援卡一览」界面截取单张滚动长图，或多张滑动分段截图一次全选导入（分段截图建议上下略留重叠，避免底部悬浮条遮挡遗漏）。</li>
+            <li><strong>自动识别卡面与 0~4 破并去重合并</strong>：重复出现的卡片会自动挑出最清晰的一帧保留，偶发被悬浮条/弹窗遮挡的卡片会标黄置顶方便核对。</li>
+            <li><strong>纯本地浏览器计算</strong>：图片与指纹库均在本地运算，不会上传任何截图到服务器；本功能仅限支援卡（S卡），P 卡请在上方分页手动勾选或通过短码导入。</li>
+          </ul>
+        </div>
+
+        <div id="shotDropZone" class="shot-dropzone">
+          <input id="shotFileInput" type="file" accept="image/*" multiple class="hidden">
+          <div class="shot-drop-icon">🖼</div>
+          <div class="shot-drop-text">点击选择或拖拽支援卡截图到这里</div>
+          <div class="shot-drop-sub">支持单张/多张分段截图与滚动长图（PNG / JPG / WebP，支持一次多选）</div>
+          <button id="btnPickShots" type="button" class="btn btn-emerald btn-sm">选择截图文件</button>
+        </div>
+
+        <div id="shotProgress" class="shot-progress hidden"></div>
+        <div id="shotError" class="modal-error hidden"></div>
+
+        <div id="shotReviewSection" class="shot-review-section hidden">
+          <div class="shot-toolbar">
+            <div id="shotSummaryText" class="shot-summary-text"></div>
+            <div class="shot-mode-switch">
+              <label class="shot-radio">
+                <input type="radio" name="shotImportMode" value="merge" checked>
+                <span>合并到当前 S卡</span>
+              </label>
+              <label class="shot-radio">
+                <input type="radio" name="shotImportMode" value="replace">
+                <span>覆盖全部 S卡</span>
+              </label>
+            </div>
+          </div>
+          <div id="shotResultGrid" class="shot-result-grid"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnClearShots" class="btn btn-ghost hidden">重新选图</button>
+        <button class="btn btn-ghost" data-close-modal="screenshotModal">取消</button>
+        <button id="btnConfirmShotImport" class="btn btn-primary" disabled>确认导入支援卡</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 汇总长图预览弹窗 -->
   <div id="imageModal" class="modal-backdrop hidden">
     <div class="modal-card modal-card-wide glass-panel">
@@ -136,6 +190,7 @@
 
   <script src="./codec.js"></script>
   <script src="./canvas-export.js"></script>
+  <script src="./screenshot-importer.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
