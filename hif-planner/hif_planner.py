@@ -34,6 +34,8 @@ PLAN_MAP = {"Sense": 1, "Logic": 2, "Anomaly": 3}
 
 STAT_CAP = 3200
 HIF_EXAM_LINES = (1960, 1307, 1089)
+HIF_GLOBAL_PCT_BONUS = 10.0
+HIF_GLOBAL_FLAT_BONUS = 100
 
 CHAR_BASE_STATS = {
     "hume": {"vo": 115, "da": 120, "vi": 125, "voRate": 20.0, "daRate": 23.0, "viRate": 18.0},
@@ -465,6 +467,8 @@ def estimate_final_stats_exact(
     mem_pct: Tuple[float, float, float],
     mem_flat: Tuple[int, int, int],
     min_eff_prune: int = -1,
+    hif_global_pct: float = HIF_GLOBAL_PCT_BONUS,
+    hif_global_flat: int = HIF_GLOBAL_FLAT_BONUS,
 ) -> Optional[dict]:
     """
     11 次蓝字事件（8 次 SP + 3 次选拔）逐次 floor 舍去小数结算 + 营业 900 红字精确分配 + 3200 截断。
@@ -477,7 +481,7 @@ def estimate_final_stats_exact(
     for s in range(3):
         attr = slot_attrs[s]
         k = ATTR_KEYS[attr]
-        total_pct = round(real_stats[f"{k}Rate"] + mem_pct[s] + sup_pct_sum[s], 4)
+        total_pct = round(real_stats[f"{k}Rate"] + hif_global_pct + mem_pct[s] + sup_pct_sum[s], 4)
         total_pct_list[s] = round(total_pct, 2)
         cache_key = (exam_events[s], sp_events[s], total_pct)
         bg = _BLUE_GAIN_CACHE.get(cache_key)
@@ -492,7 +496,7 @@ def estimate_final_stats_exact(
                     bg += math.floor(ev * mult + 1e-9)
             _BLUE_GAIN_CACHE[cache_key] = bg
         blue_gain_list[s] = bg
-        pre_list[s] = real_stats[k] + mem_flat[s] + bg + sup_flat_sum[s]
+        pre_list[s] = real_stats[k] + hif_global_flat + mem_flat[s] + bg + sup_flat_sum[s]
 
     pre_stats = tuple(pre_list)
     if min_eff_prune > 0:
@@ -884,6 +888,8 @@ def print_solution(
     cards_by_id: dict,
     calc_seika: bool,
     show_detail: bool = False,
+    hif_global_pct: float = HIF_GLOBAL_PCT_BONUS,
+    hif_global_flat: int = HIF_GLOBAL_FLAT_BONUS,
 ):
     deck = sol["deck"]
     est = sol["est"]
@@ -939,8 +945,8 @@ def print_solution(
         warn = " ⚠️溢出归0!" if raw_v > STAT_CAP else (" ⚠️未达单极线" if cap_v < line else "")
         print(
             f"      · {ATTR_NAMES[attr]}={cap_v}({raw_v}){warn} | "
-            f"总%={tot_r}% (角色{ch_r}%+回忆{mem_pct[s_idx]}%+卡{sup_r}%) | "
-            f"蓝字逐次结算+{est['blue_gain'][s_idx]} / 卡固值+{est['sup_flat_sum'][s_idx]} / 营+{est['biz_split'][s_idx]}"
+            f"总%={tot_r}% (角色{ch_r}%+全局{hif_global_pct}%+回忆{mem_pct[s_idx]}%+卡{sup_r}%) | "
+            f"开局全局+{hif_global_flat} / 蓝字逐次+{est['blue_gain'][s_idx]} / 卡固值+{est['sup_flat_sum'][s_idx]} / 营+{est['biz_split'][s_idx]}"
         )
 
     for item in deck["cards"]:
@@ -970,6 +976,8 @@ def main():
     parser.add_argument("--star", type=int, default=1335, help="总星耀值，默认满值 1335")
     parser.add_argument("--mem-pct", default="11.2,11.2,0", help="回忆百分比(一,二,三属)，默认 11.2,11.2,0")
     parser.add_argument("--mem-flat", default="0,0,120", help="回忆固定白值(一,二,三属)，默认 0,0,120")
+    parser.add_argument("--hif-global-pct", type=float, default=HIF_GLOBAL_PCT_BONUS, help="HIF全局三属性开局百分比加成(%%)，默认 10.0")
+    parser.add_argument("--hif-global-flat", type=int, default=HIF_GLOBAL_FLAT_BONUS, help="HIF全局三属性开局固值加成，默认 100")
     parser.add_argument("--sp-seq", default=None, help="固定路线时手动指定8天SP分配(1/2/3)")
     parser.add_argument("--ssr-pick", type=int, default=10, help="抓SSR卡次数(B44)，默认 10")
     parser.add_argument("--sp20", type=int, default=4, help="20SP触发次数(B49)，默认吃满 4 次")
@@ -1033,7 +1041,7 @@ def main():
     print(f"初始三维({src_note}): Vo={real_stats['vo']}({real_stats['voRate']}%), Da={real_stats['da']}({real_stats['daRate']}%), Vi={real_stats['vi']}({real_stats['viRate']}%)")
     print(f"自动推导槽位: 一属={ATTR_NAMES[slot_attrs[0]]} | 二属={ATTR_NAMES[slot_attrs[1]]} | 三属={ATTR_NAMES[slot_attrs[2]]}")
     print(
-        f"参数: 本战1={args.round1}万 | 本战2={args.round2}万 | 星耀={args.star} | 回忆%={args.mem_pct} 固值={args.mem_flat}\n"
+        f"参数: 本战1={args.round1}万 | 本战2={args.round2}万 | 星耀={args.star} | HIF全局=+{args.hif_global_pct}%/+{args.hif_global_flat} | 回忆%={args.mem_pct} 固值={args.mem_flat}\n"
         f"      抓SSR={args.ssr_pick} | 20SP={args.sp20} | 相谈饮料={args.consult_drinks} | 日程={route_mode} | 三折叠+2饮料={args.trifold_drink} | 最低SP={min_sp}"
     )
     print("=" * 78)
@@ -1131,6 +1139,8 @@ def main():
                                     mem_pct=mem_pct,
                                     mem_flat=mem_flat,
                                     min_eff_prune=prune_floor,
+                                    hif_global_pct=args.hif_global_pct,
+                                    hif_global_flat=args.hif_global_flat,
                                 )
                                 if est is None:
                                     continue
@@ -1186,7 +1196,10 @@ def main():
     )
     for idx, rec in enumerate(shown, 1):
         print_solution(
-            idx, rec, real_stats, slot_attrs, mem_pct, cards_by_id, args.seika, show_detail=(args.detail or idx == 1)
+            idx, rec, real_stats, slot_attrs, mem_pct, cards_by_id, args.seika,
+            show_detail=(args.detail or idx == 1),
+            hif_global_pct=args.hif_global_pct,
+            hif_global_flat=args.hif_global_flat,
         )
 
     # 额外输出各主流配比最佳分数榜，方便直观对比 4/2、4/1/1、3/3、3/2/1 等配比差异

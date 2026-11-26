@@ -931,7 +931,7 @@ function buildHifDeckHtml({ ownerLabel, idol, characters, result, dataDir }) {
     </section>
 
     <footer class="footer">
-      默认口径：本战1 140w / 本战2 240w / 星耀 1335 / 回忆 +11.2% · 仅作配卡参考
+      默认口径：HIF全局 +10%/+100 · 本战1 140w / 本战2 240w / 星耀 1335 / 回忆 +11.2% · 仅作配卡参考
     </footer>
   </div>
 </body>

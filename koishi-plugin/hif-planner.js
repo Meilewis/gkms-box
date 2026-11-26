@@ -21,6 +21,8 @@
 
   const STAT_CAP = 3200;
   const HIF_EXAM_LINES = [1960, 1307, 1089];
+  const HIF_GLOBAL_PCT_BONUS = 10.0;
+  const HIF_GLOBAL_FLAT_BONUS = 100;
 
   // 13 位角色实测初始三维与成长率（与 hif_planner.py 完全对齐）
   const CHAR_BASE_STATS = {
@@ -959,6 +961,8 @@
     const round1Wan = options.round1Wan ?? 140.0;
     const round2Wan = options.round2Wan ?? 240.0;
     const star = options.star ?? 1335;
+    const hifGlobalPct = options.hifGlobalPct ?? HIF_GLOBAL_PCT_BONUS;
+    const hifGlobalFlat = options.hifGlobalFlat ?? HIF_GLOBAL_FLAT_BONUS;
     const memPct = options.memPct || [11.2, 11.2, 0.0];
     const memFlat = options.memFlat || [0, 0, 120];
     const calcItem = options.calcItem !== undefined ? Boolean(options.calcItem) : true;
@@ -1011,9 +1015,9 @@
     const slotKey0 = ATTR_KEYS[slotAttrs[0]];
     const slotKey1 = ATTR_KEYS[slotAttrs[1]];
     const slotKey2 = ATTR_KEYS[slotAttrs[2]];
-    const init0 = realStats[slotKey0] + memFlat[0];
-    const init1 = realStats[slotKey1] + memFlat[1];
-    const init2 = realStats[slotKey2] + memFlat[2];
+    const init0 = realStats[slotKey0] + hifGlobalFlat + memFlat[0];
+    const init1 = realStats[slotKey1] + hifGlobalFlat + memFlat[1];
+    const init2 = realStats[slotKey2] + hifGlobalFlat + memFlat[2];
 
     let bestRec = null;
     let bestGlobalEff = -1;
@@ -1058,9 +1062,9 @@
             for (const deck of candDecks) {
               if (!forceMini && deck.cards.some((c) => c.isMiniDrink)) continue;
 
-              const tp0 = roundN(realStats[`${slotKey0}Rate`] + memPct[0] + deck.supPct[0], 4);
-              const tp1 = roundN(realStats[`${slotKey1}Rate`] + memPct[1] + deck.supPct[1], 4);
-              const tp2 = roundN(realStats[`${slotKey2}Rate`] + memPct[2] + deck.supPct[2], 4);
+              const tp0 = roundN(realStats[`${slotKey0}Rate`] + hifGlobalPct + memPct[0] + deck.supPct[0], 4);
+              const tp1 = roundN(realStats[`${slotKey1}Rate`] + hifGlobalPct + memPct[1] + deck.supPct[1], 4);
+              const tp2 = roundN(realStats[`${slotKey2}Rate`] + hifGlobalPct + memPct[2] + deck.supPct[2], 4);
               const totalPctDisplay = [roundN(tp0, 2), roundN(tp1, 2), roundN(tp2, 2)];
 
               const spArr0 = getSpGainArr(sp1Count, 0, tp0, spVariants);
@@ -1454,6 +1458,8 @@
     BIZ_DAYS,
     STAT_CAP,
     HIF_EXAM_LINES,
+    HIF_GLOBAL_PCT_BONUS,
+    HIF_GLOBAL_FLAT_BONUS,
     compileCardExpr,
     loadHifEngine,
     getIdolRealStats,

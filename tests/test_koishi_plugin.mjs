@@ -713,7 +713,8 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
   const cardMatches = html.match(/class="h-card /g) || [];
   assert.equal(cardMatches.length, 6, '拼图必须严格展示 6 张支援卡');
   assert.ok(html.includes('借 · 满破'), '拼图必须包含借卡标识');
-  assert.ok(html.includes('33966'), '拼图必须包含精准预计 HIF 总评 33966');
+  assert.ok(html.includes('34990'), '拼图必须包含精准预计 HIF 总评 34990');
+  assert.ok(html.includes('全局 +10%/+100'), '拼图注脚须标注 HIF 全局 +10%/+100');
   assert.ok(html.includes('ガラクタロード'), '拼图必须包含目标 P 卡名');
   assert.equal(html.includes('<script>alert(1)</script>'), false, '昵称 XSS 必须被转义');
   assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
