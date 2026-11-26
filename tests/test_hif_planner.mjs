@@ -83,8 +83,8 @@ test('HIF 求解引擎三组黄金基准与 Python v2 100% 一致且耗时 < 2.5
   const r1 = HifPlanner.solveBestHifDeck(cidolByKey['hrnm-3-017'], null, engine, supportByKey);
   const dt1 = Date.now() - t1;
   assert.equal(r1.ok, true);
-  assert.equal(r1.result.rating.finalRating, 35290);
-  assert.equal(r1.result.effectiveTotal, 7189);
+  assert.equal(r1.result.rating.finalRating, 35210);
+  assert.equal(r1.result.effectiveTotal, 7149);
   assert.equal(r1.result.overflowLoss, 41);
   assert.equal(r1.result.ratio, '2 / 4');
   assert.ok(dt1 < 2500, `全4破莉波求解耗时过久: ${dt1}ms`);
@@ -94,8 +94,8 @@ test('HIF 求解引擎三组黄金基准与 Python v2 100% 一致且耗时 < 2.5
   const r2 = HifPlanner.solveBestHifDeck(cidolByKey['fktn-3-013'], null, engine, supportByKey);
   const dt2 = Date.now() - t2;
   assert.equal(r2.ok, true);
-  assert.equal(r2.result.rating.finalRating, 35258);
-  assert.equal(r2.result.effectiveTotal, 7173);
+  assert.equal(r2.result.rating.finalRating, 35178);
+  assert.equal(r2.result.effectiveTotal, 7133);
   assert.equal(r2.result.overflowLoss, 56);
   assert.equal(r2.result.ratio, '4 / 2');
   assert.ok(dt2 < 2500, `全4破琴音求解耗时过久: ${dt2}ms`);
@@ -111,15 +111,15 @@ test('HIF 求解引擎三组黄金基准与 Python v2 100% 一致且耗时 < 2.5
   const dt3 = Date.now() - t3;
   assert.equal(r3.ok, true);
   const res3 = r3.result;
-  assert.equal(res3.rating.finalRating, 34990);
-  assert.equal(res3.effectiveTotal, 7039);
+  assert.equal(res3.rating.finalRating, 34910);
+  assert.equal(res3.effectiveTotal, 6999);
   assert.equal(res3.overflowLoss, 0);
   assert.equal(res3.ratio, '2 / 4');
   assert.equal(res3.cards.length, 6);
-  // 8 天 SP 全蓝(二属 idx=2)，选拔蓝/黄/黄(slot 1,0,0)，营业累计黄+360/红+540
+  // 8 天 SP 全蓝(二属 idx=2)，选拔蓝/黄/黄(slot 1,0,0)，营业累计黄+300/红+600
   assert.deepEqual(res3.spSeq, [2, 2, 2, 2, 2, 2, 2, 2]);
   assert.deepEqual(res3.examTargets, [1, 0, 0]);
-  assert.deepEqual(res3.bizSplit, [360, 0, 540]);
+  assert.deepEqual(res3.bizSplit, [300, 0, 600]);
   const borrowedCard = res3.cards.find((c) => c.borrowed);
   assert.ok(borrowedCard);
   assert.equal(borrowedCard.supportKey, '3-0099');
@@ -276,8 +276,9 @@ test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求�
 
   const HifParamsCodec = require(pluginCodecPath);
 
-  // 1. 全默认编码为空字符串
+  // 1. 全默认编码为空字符串，且默认三属回忆固值为 80 (4×20)
   const defaults = HifParamsCodec.getDefaultParams();
+  assert.equal(defaults.mf3, 80);
   assert.equal(HifParamsCodec.encodeHifParams(defaults), '');
 
   // 2. 仅编码非默认修改项并无损回环解码

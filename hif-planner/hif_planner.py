@@ -975,7 +975,7 @@ def main():
     parser.add_argument("--round2", type=float, default=240.0, help="本战2打分(万)，默认满分 240")
     parser.add_argument("--star", type=int, default=1335, help="总星耀值，默认满值 1335")
     parser.add_argument("--mem-pct", default="11.2,11.2,0", help="回忆百分比(一,二,三属)，默认 11.2,11.2,0")
-    parser.add_argument("--mem-flat", default="0,0,120", help="回忆固定白值(一,二,三属)，默认 0,0,120")
+    parser.add_argument("--mem-flat", default="0,0,80", help="回忆固定白值(一,二,三属)，默认 0,0,80")
     parser.add_argument("--hif-global-pct", type=float, default=HIF_GLOBAL_PCT_BONUS, help="HIF全局三属性开局百分比加成(%%)，默认 10.0")
     parser.add_argument("--hif-global-flat", type=int, default=HIF_GLOBAL_FLAT_BONUS, help="HIF全局三属性开局固值加成，默认 100")
     parser.add_argument("--sp-seq", default=None, help="固定路线时手动指定8天SP分配(1/2/3)")

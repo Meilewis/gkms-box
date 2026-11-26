@@ -18,14 +18,14 @@
     {
       id: 'memory',
       title: '回忆加成（三属性）',
-      desc: '默认一/二属各 +11.2%（4×2.8%）、三属 +120 固值（4×30）；可按你的实际回忆卡调整。',
+      desc: '默认一/二属各 +11.2%（4×2.8%）、三属 +80 固值（4×20）；可按你的实际回忆卡调整。',
       items: [
         { key: 'mp1', label: '一属回忆%', shortLabel: '一属回忆%', defaultVal: 11.2, min: 0, max: 100, step: 0.1, type: 'float', unit: '%' },
         { key: 'mp2', label: '二属回忆%', shortLabel: '二属回忆%', defaultVal: 11.2, min: 0, max: 100, step: 0.1, type: 'float', unit: '%' },
         { key: 'mp3', label: '三属回忆%', shortLabel: '三属回忆%', defaultVal: 0, min: 0, max: 100, step: 0.1, type: 'float', unit: '%' },
         { key: 'mf1', label: '一属回忆固值', shortLabel: '一属回忆固值', defaultVal: 0, min: 0, max: 1000, step: 10, type: 'int', unit: '' },
         { key: 'mf2', label: '二属回忆固值', shortLabel: '二属回忆固值', defaultVal: 0, min: 0, max: 1000, step: 10, type: 'int', unit: '' },
-        { key: 'mf3', label: '三属回忆固值', shortLabel: '三属回忆固值', defaultVal: 120, min: 0, max: 1000, step: 10, type: 'int', unit: '' },
+        { key: 'mf3', label: '三属回忆固值', shortLabel: '三属回忆固值', defaultVal: 80, min: 0, max: 1000, step: 10, type: 'int', unit: '' },
       ],
     },
     {

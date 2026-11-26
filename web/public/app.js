@@ -3,7 +3,8 @@
 
   const STORAGE_SUPPORT_KEY = 'gkms_box_support_v1';
   const STORAGE_CIDOL_KEY = 'gkms_box_cidol_v1';
-  const STORAGE_HIF_PARAMS_KEY = 'gkms_box_hif_params_v1';
+  const STORAGE_HIF_PARAMS_KEY = 'gkms_box_hif_params_v2';
+  const LEGACY_HIF_PARAMS_KEY = 'gkms_box_hif_params_v1';
   const STORAGE_HIF_ATTACH_KEY = 'gkms_box_hif_attach_v1';
   const LEGACY_SUPPORT_KEY = 'gakuen_box_data_v5';
   const LEGACY_CIDOL_KEY = 'gakuen_cidol_box_data_v1';
@@ -117,11 +118,11 @@
     } catch { /* ignore */ }
 
     try {
+      const defaults = HifParams.getDefaultParams();
       const savedHp = localStorage.getItem(STORAGE_HIF_PARAMS_KEY);
       if (savedHp) {
         const parsed = JSON.parse(savedHp);
         if (parsed && typeof parsed === 'object') {
-          const defaults = HifParams.getDefaultParams();
           Object.entries(parsed).forEach(([k, v]) => {
             const spec = HifParams.PARAM_SPECS[k];
             if (!spec || spec.locked) return;
@@ -129,6 +130,28 @@
             if (norm.ok) defaults[k] = norm.value;
           });
           state.hifParams = defaults;
+        }
+      } else {
+        const legacyHp = localStorage.getItem(LEGACY_HIF_PARAMS_KEY);
+        if (legacyHp) {
+          const parsed = JSON.parse(legacyHp);
+          if (parsed && typeof parsed === 'object') {
+            Object.entries(parsed).forEach(([k, v]) => {
+              const spec = HifParams.PARAM_SPECS[k];
+              if (!spec || spec.locked) return;
+              const norm = HifParams.normalizeValue(spec, v);
+              if (!norm.ok) return;
+              // 兼容历史旧版全量持久化：旧默认 mf3=120 视为未修改，自动迁移为新默认 80
+              if (k === 'mf3' && norm.value === 120) return;
+              defaults[k] = norm.value;
+            });
+            state.hifParams = defaults;
+          }
+          const { overrides } = HifParams.getChangedParams(state.hifParams);
+          if (Object.keys(overrides).length > 0) {
+            localStorage.setItem(STORAGE_HIF_PARAMS_KEY, JSON.stringify(overrides));
+          }
+          localStorage.removeItem(LEGACY_HIF_PARAMS_KEY);
         }
       }
     } catch { /* ignore */ }
@@ -141,7 +164,12 @@
 
   function saveHifParamsState() {
     try {
-      localStorage.setItem(STORAGE_HIF_PARAMS_KEY, JSON.stringify(state.hifParams));
+      const { overrides } = HifParams.getChangedParams(state.hifParams);
+      if (Object.keys(overrides).length === 0) {
+        localStorage.removeItem(STORAGE_HIF_PARAMS_KEY);
+      } else {
+        localStorage.setItem(STORAGE_HIF_PARAMS_KEY, JSON.stringify(overrides));
+      }
     } catch {
       showToast('本地保存失败（浏览器存储受限或空间不足）', 3600);
     }

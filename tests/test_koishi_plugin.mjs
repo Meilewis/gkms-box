@@ -713,7 +713,7 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
   const cardMatches = html.match(/class="h-card /g) || [];
   assert.equal(cardMatches.length, 6, '拼图必须严格展示 6 张支援卡');
   assert.ok(html.includes('借 · 满破'), '拼图必须包含借卡标识');
-  assert.ok(html.includes('34990'), '拼图必须包含精准预计 HIF 总评 34990');
+  assert.ok(html.includes('34910'), '拼图必须包含精准预计 HIF 总评 34910');
   assert.ok(html.includes('全局 +10%/+100'), '拼图注脚须标注 HIF 全局 +10%/+100');
   assert.ok(html.includes('ガラクタロード'), '拼图必须包含目标 P 卡名');
   assert.equal(html.includes('<script>alert(1)</script>'), false, '昵称 XSS 必须被转义');
@@ -816,7 +816,7 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
   assert.equal(badParamRes.ret.type, 'text');
   assert.match(badParamRes.ret.attrs.content, /参数代码有误/);
 
-  // 6b. 带合法参数码（放在卡名后面），直接返图、不撤回、底部含自定义参数说明且总评高于默认 34990
+  // 6b. 带合法参数码（放在卡名后面），直接返图、不撤回、底部含自定义参数说明且总评高于默认 34910
   const okParamRes = await ctxCustom.dispatch(
     createSession(`hif配卡 姬崎莉波 ガラクタロード ${customCode}`, { userId: 'u100' })
   );
@@ -826,7 +826,7 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
   assert.ok(customHtml.includes('自定义参数：'), '拼图注脚须显示自定义参数说明');
   assert.ok(customHtml.includes('一属回忆%=20%'), '自定义参数摘要应包含修改项');
   const ratingMatch = /预计 HIF 总评<\/div>\s*<div class="stat-v">(\d+)<\/div>/.exec(customHtml);
-  assert.ok(ratingMatch && Number(ratingMatch[1]) > 34990, '自定义提高回忆%和饮料后总评应高于基准 34990');
+  assert.ok(ratingMatch && Number(ratingMatch[1]) > 34910, '自定义提高回忆%和饮料后总评应高于基准 34910');
 
   // 6c. 带参数码放在最前面的格式同样可被剥离解析
   const ctxPrefix = createMockCtx(db, { cooldownSeconds: 0, boxQueryRecallSeconds: 0 }, () =>

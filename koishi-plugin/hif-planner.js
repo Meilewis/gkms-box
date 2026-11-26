@@ -974,7 +974,7 @@
     const hifGlobalPct = options.hifGlobalPct ?? HIF_GLOBAL_PCT_BONUS;
     const hifGlobalFlat = options.hifGlobalFlat ?? HIF_GLOBAL_FLAT_BONUS;
     const memPct = options.memPct || [11.2, 11.2, 0.0];
-    const memFlat = options.memFlat || [0, 0, 120];
+    const memFlat = options.memFlat || [0, 0, 80];
     const baseDrinks = options.baseDrinks ?? 20;
     const actionOverrides = options.actionOverrides || null;
     const customSummary = options.customSummary || '';
