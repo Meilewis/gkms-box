@@ -3,10 +3,13 @@
 
   const STORAGE_SUPPORT_KEY = 'gkms_box_support_v1';
   const STORAGE_CIDOL_KEY = 'gkms_box_cidol_v1';
+  const STORAGE_HIF_PARAMS_KEY = 'gkms_box_hif_params_v1';
+  const STORAGE_HIF_ATTACH_KEY = 'gkms_box_hif_attach_v1';
   const LEGACY_SUPPORT_KEY = 'gakuen_box_data_v5';
   const LEGACY_CIDOL_KEY = 'gakuen_cidol_box_data_v1';
 
   const Codec = window.GkmsCodec;
+  const HifParams = window.GkmsHifParamsCodec;
   const CanvasExport = window.GkmsCanvasExport;
   const ScreenshotImporter = window.GkmsScreenshotImporter;
 
@@ -35,6 +38,9 @@
       cidolQuery: '',
     },
     shortBusy: false,
+    hifParams: HifParams.getDefaultParams(),
+    hifAttachParamsToCopy: true,
+    hifParamImportOpen: false,
     fingerprintDb: null,
     shotBusy: false,
     shotItems: [],
@@ -108,6 +114,42 @@
           });
         }
       }
+    } catch { /* ignore */ }
+
+    try {
+      const savedHp = localStorage.getItem(STORAGE_HIF_PARAMS_KEY);
+      if (savedHp) {
+        const parsed = JSON.parse(savedHp);
+        if (parsed && typeof parsed === 'object') {
+          const defaults = HifParams.getDefaultParams();
+          Object.entries(parsed).forEach(([k, v]) => {
+            const spec = HifParams.PARAM_SPECS[k];
+            if (!spec || spec.locked) return;
+            const norm = HifParams.normalizeValue(spec, v);
+            if (norm.ok) defaults[k] = norm.value;
+          });
+          state.hifParams = defaults;
+        }
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const savedAttach = localStorage.getItem(STORAGE_HIF_ATTACH_KEY);
+      if (savedAttach === '0') state.hifAttachParamsToCopy = false;
+    } catch { /* ignore */ }
+  }
+
+  function saveHifParamsState() {
+    try {
+      localStorage.setItem(STORAGE_HIF_PARAMS_KEY, JSON.stringify(state.hifParams));
+    } catch {
+      showToast('本地保存失败（浏览器存储受限或空间不足）', 3600);
+    }
+  }
+
+  function saveHifAttachState() {
+    try {
+      localStorage.setItem(STORAGE_HIF_ATTACH_KEY, state.hifAttachParamsToCopy ? '1' : '0');
     } catch { /* ignore */ }
   }
 
@@ -210,22 +252,169 @@
     const cidCode = getCidolExportString();
     const supCount = Object.keys(state.supportOwned).length;
     const cidCount = Object.keys(state.cidolOwned).length;
+    const changedHp = HifParams.getChangedParams(state.hifParams);
 
     el('tabCountSupport').textContent = `${supCount}/${state.supportCatalog.length}`;
     el('tabCountCidol').textContent = `${cidCount}/${state.cidolCatalog.length}`;
+    if (el('tabCountHifParams')) {
+      el('tabCountHifParams').textContent = changedHp.changedKeys.length
+        ? `已改 ${changedHp.changedKeys.length} 项`
+        : '默认';
+    }
 
     el('supportCodePreview').textContent = supCode || '暂无持有支援卡';
     el('cidolCodePreview').textContent = cidCode || '暂无持有角色皮肤';
 
-    const curCount = state.activeTab === 'support' ? supCount : cidCount;
-    el('btnExportCurrentImg').disabled = curCount === 0;
-    el('btnExportCurrentLabel').textContent =
-      state.activeTab === 'support' ? '生成 S卡汇总长图' : '生成 P卡汇总长图';
+    if (state.activeTab === 'hifParams') {
+      el('btnExportCurrentImg').disabled = true;
+      el('btnExportCurrentLabel').textContent = '参数页无需导出图';
+      el('btnResetCurrent').textContent = '恢复默认参数';
+    } else {
+      const curCount = state.activeTab === 'support' ? supCount : cidCount;
+      el('btnExportCurrentImg').disabled = curCount === 0;
+      el('btnExportCurrentLabel').textContent =
+        state.activeTab === 'support' ? '生成 S卡汇总长图' : '生成 P卡汇总长图';
+      el('btnResetCurrent').textContent = '清空当前页';
+    }
     el('btnExportAllImg').disabled = supCount === 0 && cidCount === 0;
     el('btnShortCode').disabled = state.shortBusy || (!supCode && !cidCode);
   }
 
+  function updateHifParamsPanelUi() {
+    const changed = HifParams.getChangedParams(state.hifParams);
+    const code = HifParams.encodeHifParams(state.hifParams);
+    const summary = HifParams.formatParamsSummary(changed.overrides);
+
+    if (el('tabCountHifParams')) {
+      el('tabCountHifParams').textContent = changed.changedKeys.length
+        ? `已改 ${changed.changedKeys.length} 项`
+        : '默认';
+    }
+    const codeNode = el('hpCodeValue');
+    if (codeNode) {
+      codeNode.textContent = code || '当前全为默认常量，查配卡无需附带代码';
+      codeNode.classList.toggle('is-empty', !code);
+    }
+    const copyBtn = el('btnCopyHifParamsCode');
+    if (copyBtn) copyBtn.disabled = !code;
+    const exBtn = el('btnCopyHifExample');
+    if (exBtn) {
+      const exCmd = code ? `hif配卡 姬崎莉波 ガラクタロード ${code}` : 'hif配卡 姬崎莉波 ガラクタロード';
+      exBtn.setAttribute('data-example-cmd', exCmd);
+      if (el('hpExampleCmd')) el('hpExampleCmd').textContent = exCmd;
+    }
+    const sumNode = el('hpChangedSummary');
+    if (sumNode) {
+      sumNode.textContent = summary
+        ? `已修改（${changed.changedKeys.length} 项）：${summary}`
+        : '所有常量均处于默认值；修改任意数值即可在上方自动生成参数码。';
+    }
+  }
+
+  function renderHifParamsStatsPanel(panel) {
+    const code = HifParams.encodeHifParams(state.hifParams);
+    const changed = HifParams.getChangedParams(state.hifParams);
+    const summary = HifParams.formatParamsSummary(changed.overrides);
+    const exCmd = code ? `hif配卡 姬崎莉波 ガラクタロード ${code}` : 'hif配卡 姬崎莉波 ガラクタロード';
+
+    panel.innerHTML = `
+      <div class="hp-code-panel">
+        <div class="hp-code-top">
+          <div>
+            <div class="stat-label">HIF 自定义常量参数代码（无状态 · 仅打包改动项）</div>
+            <div class="hp-code-box">
+              <code id="hpCodeValue" class="hp-code-val ${code ? '' : 'is-empty'}">${escapeHtml(
+                code || '当前全为默认常量，查配卡无需附带代码'
+              )}</code>
+            </div>
+          </div>
+          <div class="hp-code-actions">
+            <button id="btnCopyHifParamsCode" type="button" class="btn btn-primary btn-sm" ${code ? '' : 'disabled'}>
+              📋 复制参数码
+            </button>
+            <button id="btnToggleHpImport" type="button" class="btn btn-ghost btn-sm">📥 导入参数码</button>
+            <button id="btnResetHpInline" type="button" class="btn btn-danger-soft btn-sm">↺ 恢复默认</button>
+          </div>
+        </div>
+
+        <div id="hpImportBar" class="hp-import-bar ${state.hifParamImportOpen ? '' : 'hidden'}">
+          <input id="hpImportInput" class="search-input" type="text" placeholder="粘贴 hp1_... 参数代码...">
+          <button id="btnApplyHpImport" type="button" class="btn btn-emerald btn-sm">应用参数码</button>
+        </div>
+
+        <div class="hp-meta-row">
+          <div class="hp-example-wrap">
+            <span class="hp-meta-label">机器人指令格式：</span>
+            <code id="hpExampleCmd" class="bot-cmd">${escapeHtml(exCmd)}</code>
+            <button id="btnCopyHifExample" type="button" class="btn-mini" data-example-cmd="${escapeHtml(exCmd)}">复制示例</button>
+          </div>
+          <label class="hp-attach-toggle">
+            <input id="chkAttachHifParams" type="checkbox" ${state.hifAttachParamsToCopy ? 'checked' : ''}>
+            <span>P卡页「复制配卡指令」自动附带当前参数码</span>
+          </label>
+        </div>
+
+        <div id="hpChangedSummary" class="hp-summary-line">${escapeHtml(
+          summary
+            ? `已修改（${changed.changedKeys.length} 项）：${summary}`
+            : '所有常量均处于默认值；修改任意数值即可在上方自动生成参数码。'
+        )}</div>
+      </div>
+    `;
+
+    el('btnCopyHifParamsCode').addEventListener('click', async () => {
+      const cur = HifParams.encodeHifParams(state.hifParams);
+      if (!cur) return showToast('当前全为默认常量，无需参数码');
+      const ok = await copyClipboard(cur);
+      showToast(ok ? `已复制参数代码：${cur}` : `复制失败：${cur}`);
+    });
+
+    el('btnToggleHpImport').addEventListener('click', () => {
+      state.hifParamImportOpen = !state.hifParamImportOpen;
+      el('hpImportBar').classList.toggle('hidden', !state.hifParamImportOpen);
+      if (state.hifParamImportOpen) el('hpImportInput').focus();
+    });
+
+    el('btnApplyHpImport').addEventListener('click', () => {
+      const raw = el('hpImportInput').value.trim();
+      const dec = HifParams.decodeHifParams(raw);
+      if (!dec.ok) {
+        return showToast(`参数码无效：${dec.error}`, 3400);
+      }
+      state.hifParams = { ...dec.fullParams };
+      state.hifParamImportOpen = false;
+      saveHifParamsState();
+      renderAll();
+      showToast(`已导入 ${dec.changedKeys.length} 项自定义参数`);
+    });
+
+    el('btnResetHpInline').addEventListener('click', () => {
+      state.hifParams = HifParams.getDefaultParams();
+      saveHifParamsState();
+      renderAll();
+      showToast('已恢复全部 HIF 默认参数');
+    });
+
+    el('btnCopyHifExample').addEventListener('click', async () => {
+      const cmd = el('btnCopyHifExample').getAttribute('data-example-cmd') || '';
+      if (!cmd) return;
+      const ok = await copyClipboard(cmd);
+      showToast(ok ? `已复制示例：${cmd}` : `复制失败：${cmd}`);
+    });
+
+    el('chkAttachHifParams').addEventListener('change', (e) => {
+      state.hifAttachParamsToCopy = Boolean(e.target.checked);
+      saveHifAttachState();
+    });
+  }
+
   function renderStatsPanel() {
+    const panel = el('statsPanel');
+    if (state.activeTab === 'hifParams') {
+      renderHifParamsStatsPanel(panel);
+      return;
+    }
+
     const summary = Codec.summarizeBox({
       supportMap: state.supportOwned,
       cidolSet: state.cidolOwned,
@@ -234,7 +423,6 @@
       characters: state.characters,
     });
 
-    const panel = el('statsPanel');
     if (state.activeTab === 'support') {
       const s = summary.support;
       const attrTitles = { vo: 'VOCAL 声乐', da: 'DANCE 舞蹈', vi: 'VISUAL 视觉', as: 'ASSIST 辅助' };
@@ -332,6 +520,12 @@
 
   function renderFilterBar() {
     const bar = el('filterBar');
+    if (state.activeTab === 'hifParams') {
+      bar.classList.add('hidden');
+      bar.innerHTML = '';
+      return;
+    }
+    bar.classList.remove('hidden');
     const f = state.filters;
 
     if (state.activeTab === 'support') {
@@ -505,8 +699,11 @@
     if (state.activeTab === 'support') {
       tip.innerHTML =
         `操作提示：点击卡片 <strong>左半边</strong> 降级，<strong>右半边</strong> 升级；或点上方「📷 截图导入 S卡」（支持长图与分段截图）。${imgStatus}`;
+    } else if (state.activeTab === 'cidol') {
+      tip.innerHTML = `操作提示：点击角色卡即可切换持有状态，点卡片下方「复制配卡指令」可一键复制 HIF 配卡指令发给机器人（若在「HIF 参数」页调整了常量会一并附带），点顶部统计条中的偶像名可快速筛出该角色。${imgStatus}`;
     } else {
-      tip.innerHTML = `操作提示：点击角色卡即可切换持有状态，点卡片下方「复制配卡指令」可一键复制 HIF 配卡指令发给机器人，点顶部统计条中的偶像名可快速筛出该角色。${imgStatus}`;
+      tip.innerHTML =
+        '操作提示：在此修改任意 HIF 常量后，顶部会实时生成专属 <code>hp1_...</code> 参数代码；发 <code>hif配卡 角色+P卡名 参数码</code> 给机器人即可按你的参数算分出图（营业固定 6 次不可改）。';
     }
   }
 
@@ -603,12 +800,13 @@
           });
         });
       });
-    } else {
+    } else if (state.activeTab === 'cidol') {
       const list = getFilteredCidolSkins();
       if (list.length === 0) {
         grid.innerHTML = '<div class="empty-state">没有符合筛选条件的角色或皮肤</div>';
         return;
       }
+      const paramsCode = state.hifAttachParamsToCopy ? HifParams.encodeHifParams(state.hifParams) : '';
 
       grid.innerHTML = list
         .map((s) => {
@@ -629,7 +827,9 @@
                </div>`;
 
           const targetName = s.isSkinVariant && s.baseName ? s.baseName : s.name;
-          const hifCmd = `hif配卡 ${charName} ${targetName}`;
+          const baseCmd = `hif配卡 ${charName} ${targetName}`;
+          const hifCmd = paramsCode ? `${baseCmd} ${paramsCode}` : baseCmd;
+          const btnLabel = paramsCode ? '📋 复制配卡指令 (含参数)' : '📋 复制配卡指令';
 
           return `
             <div class="c-card ${owned ? 'is-owned' : 'is-unowned'}" data-c-card="${escapeHtml(s.key)}">
@@ -648,10 +848,11 @@
                 <div class="c-skin-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>
                 <button
                   type="button"
-                  class="c-hif-copy-btn"
+                  class="c-hif-copy-btn ${paramsCode ? 'has-params' : ''}"
                   data-copy-hif="${escapeHtml(hifCmd)}"
+                  data-default-label="${escapeHtml(btnLabel)}"
                   title="复制指令：${escapeHtml(hifCmd)}"
-                >📋 复制配卡指令</button>
+                >${btnLabel}</button>
               </div>
             </div>
           `;
@@ -662,6 +863,7 @@
         btn.addEventListener('click', async (e) => {
           e.stopPropagation();
           const cmd = btn.getAttribute('data-copy-hif') || '';
+          const defaultLabel = btn.getAttribute('data-default-label') || '📋 复制配卡指令';
           const ok = await copyClipboard(cmd);
           if (ok) {
             showToast(`已复制：${cmd}`);
@@ -670,7 +872,7 @@
             btn.textContent = '✓ 已复制';
             btn._copyTimer = setTimeout(() => {
               btn.classList.remove('is-copied');
-              btn.textContent = '📋 复制配卡指令';
+              btn.textContent = defaultLabel;
               btn._copyTimer = null;
             }, 1400);
           } else {
@@ -689,6 +891,115 @@
           renderHeaderActions();
           renderStatsPanel();
           renderCardGrid();
+        });
+      });
+    } else {
+      grid.className = 'card-grid mode-hif-params';
+      grid.innerHTML = HifParams.PARAM_GROUPS.map(
+        (grp) => `
+          <section class="hp-group-card glass-panel">
+            <div class="hp-group-head">
+              <div>
+                <h3 class="hp-group-title">${escapeHtml(grp.title)}</h3>
+                <p class="hp-group-desc">${escapeHtml(grp.desc)}</p>
+              </div>
+            </div>
+            <div class="hp-items-grid">
+              ${grp.items
+                .map((spec) => {
+                  const curVal = state.hifParams[spec.key];
+                  const isMod = !spec.locked && curVal !== spec.defaultVal;
+                  const unit = spec.unit || '';
+                  const defLabel = spec.locked
+                    ? `固定 ${spec.defaultVal}${unit}`
+                    : `默认 ${spec.defaultVal}${unit}`;
+                  if (spec.locked) {
+                    return `
+                      <div class="hp-item is-locked" data-hp-item="${escapeHtml(spec.key)}">
+                        <div class="hp-item-top">
+                          <span class="hp-item-label">${escapeHtml(spec.label)}</span>
+                          <span class="hp-lock-badge">🔒 固定</span>
+                        </div>
+                        <div class="hp-locked-val">${spec.defaultVal}${escapeHtml(unit)} <small>(不可修改)</small></div>
+                      </div>
+                    `;
+                  }
+                  return `
+                    <div class="hp-item ${isMod ? 'is-modified' : ''}" data-hp-item="${escapeHtml(spec.key)}">
+                      <div class="hp-item-top">
+                        <span class="hp-item-label">${escapeHtml(spec.label)}</span>
+                        <span class="hp-item-def">${escapeHtml(defLabel)}</span>
+                      </div>
+                      <div class="hp-stepper">
+                        <button type="button" class="hp-step-btn" data-hp-step="-1" data-hp-key="${escapeHtml(spec.key)}" title="减少">−</button>
+                        <input
+                          type="number"
+                          class="hp-input"
+                          data-hp-input="${escapeHtml(spec.key)}"
+                          value="${curVal}"
+                          min="${spec.min}"
+                          max="${spec.max}"
+                          step="${spec.step}"
+                        >
+                        <button type="button" class="hp-step-btn" data-hp-step="1" data-hp-key="${escapeHtml(spec.key)}" title="增加">+</button>
+                      </div>
+                    </div>
+                  `;
+                })
+                .join('')}
+            </div>
+          </section>
+        `
+      ).join('');
+
+      const applyParamChange = (key, rawVal, syncInput) => {
+        const spec = HifParams.PARAM_SPECS[key];
+        if (!spec || spec.locked) return;
+        const norm = HifParams.normalizeValue(spec, rawVal);
+        const itemEl = grid.querySelector(`[data-hp-item="${key}"]`);
+        const inputEl = grid.querySelector(`[data-hp-input="${key}"]`);
+        if (!norm.ok) {
+          if (syncInput && inputEl) {
+            inputEl.value = state.hifParams[key];
+            showToast(norm.error, 2600);
+          }
+          return;
+        }
+        state.hifParams[key] = norm.value;
+        saveHifParamsState();
+        if (syncInput && inputEl) {
+          inputEl.value = norm.value;
+        }
+        if (itemEl) {
+          itemEl.classList.toggle('is-modified', norm.value !== spec.defaultVal);
+        }
+        updateHifParamsPanelUi();
+      };
+
+      grid.querySelectorAll('[data-hp-step]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const key = btn.getAttribute('data-hp-key');
+          const spec = HifParams.PARAM_SPECS[key];
+          if (!spec || spec.locked) return;
+          const dir = Number(btn.getAttribute('data-hp-step'));
+          const cur = Number(state.hifParams[key]);
+          const nextRaw = spec.type === 'float' ? Math.round((cur + dir * spec.step) * 100) / 100 : cur + dir * spec.step;
+          const clamped = Math.max(spec.min, Math.min(spec.max, nextRaw));
+          applyParamChange(key, clamped, true);
+        });
+      });
+
+      grid.querySelectorAll('[data-hp-input]').forEach((inp) => {
+        const key = inp.getAttribute('data-hp-input');
+        inp.addEventListener('input', () => {
+          if (inp.value === '') return;
+          applyParamChange(key, inp.value, false);
+        });
+        inp.addEventListener('change', () => {
+          applyParamChange(key, inp.value, true);
+        });
+        inp.addEventListener('blur', () => {
+          applyParamChange(key, inp.value, true);
         });
       });
     }
@@ -1245,13 +1556,20 @@
         if (!confirm('确定要清空当前所有已勾选的支援卡吗？')) return;
         state.supportOwned = {};
         saveSupportState();
-      } else {
+        renderAll();
+        showToast('当前页数据已清空');
+      } else if (state.activeTab === 'cidol') {
         if (!confirm('确定要清空当前所有已勾选的角色与皮肤吗？')) return;
         state.cidolOwned = {};
         saveCidolState();
+        renderAll();
+        showToast('当前页数据已清空');
+      } else {
+        state.hifParams = HifParams.getDefaultParams();
+        saveHifParamsState();
+        renderAll();
+        showToast('已恢复全部 HIF 默认参数');
       }
-      renderAll();
-      showToast('当前页数据已清空');
     });
 
     document.querySelectorAll('[data-close-modal]').forEach((btn) => {

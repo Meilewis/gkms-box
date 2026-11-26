@@ -264,3 +264,78 @@ test('网页端全量 315 张 P 卡与皮肤生成的「复制配卡指令」100
   }
   assert.equal(matched, 315);
 });
+
+test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求解生效', () => {
+  const pluginCodecPath = path.join(PLUGIN_DIR, 'hif-params-codec.js');
+  const webCodecPath = path.join(ROOT, 'web', 'public', 'hif-params-codec.js');
+  assert.equal(
+    fs.readFileSync(pluginCodecPath, 'utf8'),
+    fs.readFileSync(webCodecPath, 'utf8'),
+    'koishi-plugin 与 web/public 的 hif-params-codec.js 必须字节级完全一致'
+  );
+
+  const HifParamsCodec = require(pluginCodecPath);
+
+  // 1. 全默认编码为空字符串
+  const defaults = HifParamsCodec.getDefaultParams();
+  assert.equal(HifParamsCodec.encodeHifParams(defaults), '');
+
+  // 2. 仅编码非默认修改项并无损回环解码
+  const customParams = { ...defaults, mp1: 20, B40: 30, B39: 10, B44: 12 };
+  const code = HifParamsCodec.encodeHifParams(customParams);
+  assert.ok(code.startsWith('hp1_'));
+  assert.ok(code.length < 64);
+
+  const dec = HifParamsCodec.decodeHifParams(code);
+  assert.equal(dec.ok, true);
+  assert.equal(dec.code, code);
+  assert.deepEqual(dec.overrides, { mp1: 20, B39: 10, B40: 30, B44: 12 });
+  assert.deepEqual(dec.solveOptions.memPct, [20, 11.2, 0]);
+  assert.equal(dec.solveOptions.baseDrinks, 30);
+  assert.deepEqual(dec.solveOptions.actionOverrides, { B39: 10, B44: 12 });
+
+  // 3. 安全拒收：B30 锁定不可改 / 未知键 / 越界 / 非整数 / 坏字符
+  const badB30 = `hp1_${Buffer.from('B30=8', 'utf8').toString('base64url')}`;
+  assert.equal(HifParamsCodec.decodeHifParams(badB30).ok, false);
+  const badUnknown = `hp1_${Buffer.from('B99=1', 'utf8').toString('base64url')}`;
+  assert.equal(HifParamsCodec.decodeHifParams(badUnknown).ok, false);
+  const badFloat = `hp1_${Buffer.from('B40=20.5', 'utf8').toString('base64url')}`;
+  assert.equal(HifParamsCodec.decodeHifParams(badFloat).ok, false);
+  const badRange = `hp1_${Buffer.from('mp1=150', 'utf8').toString('base64url')}`;
+  assert.equal(HifParamsCodec.decodeHifParams(badRange).ok, false);
+  assert.equal(HifParamsCodec.decodeHifParams('hp1_!!!').ok, false);
+
+  // 4. extractHifParamsCode 前置与后置均能正确剥离，多段拒绝
+  const tailExt = HifParamsCodec.extractHifParamsCode(`姬崎莉波 ガラクタロード ${code}`);
+  assert.equal(tailExt.ok, true);
+  assert.equal(tailExt.hasParams, true);
+  assert.equal(tailExt.remainQuery, '姬崎莉波 ガラクタロード');
+
+  const headExt = HifParamsCodec.extractHifParamsCode(`HP1_${code.slice(4)} 莉波 感性`);
+  assert.equal(headExt.ok, true);
+  assert.equal(headExt.hasParams, true);
+  assert.equal(headExt.decoded.code, code);
+  assert.equal(headExt.remainQuery, '莉波 感性');
+
+  const multiExt = HifParamsCodec.extractHifParamsCode(`莉波 ${code} ${code}`);
+  assert.equal(multiExt.ok, false);
+
+  // 5. 自定义参数进入 solveBestHifDeck 实际影响求解分数与面板
+  const engine = HifPlanner.loadHifEngine(PLUGIN_DIR);
+  const decBox = Codec.decodeSupportBox(REAL_BOX_B64, supportByKey);
+  const fullBoxLbs = Object.fromEntries(supportCatalog.map((c) => [c.key, -1]));
+  Object.assign(fullBoxLbs, decBox.map);
+
+  const baseline = HifPlanner.solveBestHifDeck(cidolByKey['hrnm-3-017'], fullBoxLbs, engine, supportByKey);
+  const customSolved = HifPlanner.solveBestHifDeck(
+    cidolByKey['hrnm-3-017'],
+    fullBoxLbs,
+    engine,
+    supportByKey,
+    dec.solveOptions
+  );
+  assert.equal(baseline.ok, true);
+  assert.equal(customSolved.ok, true);
+  assert.ok(customSolved.result.rating.finalRating > baseline.result.rating.finalRating);
+  assert.ok(customSolved.result.customSummary.includes('一属回忆%=20%'));
+});

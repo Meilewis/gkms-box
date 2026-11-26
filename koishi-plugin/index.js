@@ -6,6 +6,7 @@ const { Schema, h } = require('koishi');
 const Codec = require('./codec');
 const renderer = require('./renderer');
 const HifPlanner = require('./hif-planner');
+const HifParamsCodec = require('./hif-params-codec');
 
 const name = 'gkms-box';
 const inject = ['database', 'puppeteer'];
@@ -298,7 +299,7 @@ function buildHelpMessage(config, catalog) {
     `3. @${bot} 查box / 晒box — 生成自己的持卡统计与拼图（30 秒后自动撤回）`,
     `4. @${bot} 查box 支援卡 / P卡 / 筱泽广 — 按分类或偶像查看自己的 BOX（仅支持查自己）`,
     `5. @${bot} 解绑box — 清除已绑定的数据`,
-    `6. @${bot} hif配卡 <P卡名/角色+流派> — 根据已绑定的 BOX 生成最优 6 配卡拼图`,
+    `6. @${bot} hif配卡 <P卡名/角色+流派> [hp1_参数码] — 根据已绑定的 BOX 生成最优 6 配卡拼图`,
     '',
     `当前收录：支援卡 ${catalog.support.length} 张 · P卡与皮肤 ${catalog.cidol.length} 项`,
   ];
@@ -856,6 +857,14 @@ function apply(ctx, config) {
         return textReply('为了保护隐私，仅支持根据自己的 BOX 生成 HIF 配卡哦。');
       }
 
+      const extractedParams = HifParamsCodec.extractHifParamsCode(hifCmd.rawArg);
+      if (!extractedParams.ok) {
+        return textReply(`参数代码有误：${truncateText(extractedParams.error, 80)}`);
+      }
+      if (!extractedParams.remainQuery) {
+        return textReply(formatHifResolveError({ reason: 'empty' }, botName));
+      }
+
       const ownerLabel = truncateText(
         (session.author && (session.author.nick || session.author.name)) ||
           session.username ||
@@ -878,7 +887,12 @@ function apply(ctx, config) {
       }
       const cidolSet = decCid.ok ? decCid.set : {};
 
-      const resolved = HifPlanner.resolveIdolForHif(hifCmd.rawArg, catalog, cidolSet, CHAR_ALIASES);
+      const resolved = HifPlanner.resolveIdolForHif(
+        extractedParams.remainQuery,
+        catalog,
+        cidolSet,
+        CHAR_ALIASES
+      );
       if (!resolved.ok) {
         return textReply(formatHifResolveError(resolved, botName));
       }
@@ -903,7 +917,8 @@ function apply(ctx, config) {
       }
 
       const boxLbs = buildFullSupportBoxLbs(catalog.support, decSup.map);
-      const solved = HifPlanner.solveBestHifDeck(resolved.idol, boxLbs, hifEngine, catalog.supportByKey);
+      const solveOptions = extractedParams.hasParams ? extractedParams.decoded.solveOptions : {};
+      const solved = HifPlanner.solveBestHifDeck(resolved.idol, boxLbs, hifEngine, catalog.supportByKey, solveOptions);
       if (!solved.ok) {
         renderCooldowns.delete(userKey);
         return textReply(solved.error);

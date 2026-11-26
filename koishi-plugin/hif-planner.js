@@ -623,20 +623,30 @@
     return [pairs[0][2], pairs[1][2], pairs[2][2]];
   }
 
-  function buildBaseRouteVars({ act, spSeq, extraDrinks = 0 }) {
+  const ALLOWED_ACTION_OVERRIDE_KEYS = new Set([
+    'B23', 'B24', 'B25', 'B26', 'B27', 'B28', 'B29', 'B32', 'B35', 'B36', 'B37', 'B38', 'B39',
+    'B42', 'B43', 'B44', 'B45', 'B47', 'B50',
+  ]);
+
+  function buildBaseRouteVars({ act, spSeq, extraDrinks = 0, baseDrinks = 20, actionOverrides = null }) {
     const r = { ...BASE_HIF_ACTIONS };
-    r.B44 = 10;
+    if (actionOverrides && typeof actionOverrides === 'object') {
+      for (const [k, v] of Object.entries(actionOverrides)) {
+        if (ALLOWED_ACTION_OVERRIDE_KEYS.has(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+          r[k] = v;
+        }
+      }
+    }
+    const safeBaseDrinks =
+      typeof baseDrinks === 'number' && Number.isFinite(baseDrinks) && baseDrinks >= 0 ? baseDrinks : 20;
     r.B33 = act.consult;
     r.B34 = act.supply;
     r.B31 = act.outing;
     r.B46 = act.special;
     r.B41 = act.special * 4;
-    r.B30 = 6;
-    r.B35 = 6;
-    r.B32 = 0;
-    r.B39 = 0;
+    r.B30 = 6; // 营业次数固定锁定为 6
     r.B49 = 4;
-    r.B40 = 20 + extraDrinks;
+    r.B40 = safeBaseDrinks + extraDrinks;
     r.B11 = 0;
     r.B12 = 0;
     r.B13 = 0;
@@ -965,6 +975,9 @@
     const hifGlobalFlat = options.hifGlobalFlat ?? HIF_GLOBAL_FLAT_BONUS;
     const memPct = options.memPct || [11.2, 11.2, 0.0];
     const memFlat = options.memFlat || [0, 0, 120];
+    const baseDrinks = options.baseDrinks ?? 20;
+    const actionOverrides = options.actionOverrides || null;
+    const customSummary = options.customSummary || '';
     const calcItem = options.calcItem !== undefined ? Boolean(options.calcItem) : true;
     const calcSeika = Boolean(options.calcSeika);
 
@@ -1036,7 +1049,7 @@
         ];
 
         for (const [forceMini, extraDrinks] of drinkModes) {
-          const rvZero = buildBaseRouteVars({ act, spSeq: repSeq, extraDrinks });
+          const rvZero = buildBaseRouteVars({ act, spSeq: repSeq, extraDrinks, baseDrinks, actionOverrides });
           const { byAttrPool, miniCard } = evalCardsFlatAndPct(
             engine,
             slotAttrs,
@@ -1175,6 +1188,9 @@
       ok: true,
       result: {
         ...bestRec,
+        memPct: memPct.slice(),
+        memFlat: memFlat.slice(),
+        customSummary,
         cards: sortedCards,
       },
     };

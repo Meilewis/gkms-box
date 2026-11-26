@@ -793,4 +793,47 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
   }
   const q5After = await ctxQueue.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'hq5' }));
   assert.equal(q5After.ret.type, 'image');
+
+  // 6. 带自定义参数代码（前置/后置）求解出图 & 非法参数码文字提示且不扣冷却
+  const HifParamsCodec = require(path.join(ROOT, 'koishi-plugin', 'hif-params-codec.js'));
+  const customCode = HifParamsCodec.encodeHifParams({
+    ...HifParamsCodec.getDefaultParams(),
+    mp1: 20,
+    B40: 30,
+    B44: 12,
+  });
+  const customPages = [];
+  const ctxCustom = createMockCtx(db, { cooldownSeconds: 60, boxQueryRecallSeconds: 30 }, () => {
+    const p = createFakePage({ boundingBox: { x: 0, y: 0, width: 1200, height: 960 } });
+    customPages.push(p);
+    return p;
+  });
+
+  // 6a. 非法参数码返回提示，且不写入冷却
+  const badParamRes = await ctxCustom.dispatch(
+    createSession('hif配卡 姬崎莉波 ガラクタロード hp1_!!!', { userId: 'u100' })
+  );
+  assert.equal(badParamRes.ret.type, 'text');
+  assert.match(badParamRes.ret.attrs.content, /参数代码有误/);
+
+  // 6b. 带合法参数码（放在卡名后面），直接返图、不撤回、底部含自定义参数说明且总评高于默认 34990
+  const okParamRes = await ctxCustom.dispatch(
+    createSession(`hif配卡 姬崎莉波 ガラクタロード ${customCode}`, { userId: 'u100' })
+  );
+  assert.equal(okParamRes.ret.type, 'image');
+  assert.equal(Array.isArray(okParamRes.ret), false);
+  const customHtml = customPages[0].handlers.html;
+  assert.ok(customHtml.includes('自定义参数：'), '拼图注脚须显示自定义参数说明');
+  assert.ok(customHtml.includes('一属回忆%=20%'), '自定义参数摘要应包含修改项');
+  const ratingMatch = /预计 HIF 总评<\/div>\s*<div class="stat-v">(\d+)<\/div>/.exec(customHtml);
+  assert.ok(ratingMatch && Number(ratingMatch[1]) > 34990, '自定义提高回忆%和饮料后总评应高于基准 34990');
+
+  // 6c. 带参数码放在最前面的格式同样可被剥离解析
+  const ctxPrefix = createMockCtx(db, { cooldownSeconds: 0, boxQueryRecallSeconds: 0 }, () =>
+    createFakePage({ boundingBox: { x: 0, y: 0, width: 1200, height: 960 } })
+  );
+  const prefixRes = await ctxPrefix.dispatch(
+    createSession(`hif配卡 ${customCode} 姬崎莉波 ガラクタロード`, { userId: 'u100' })
+  );
+  assert.equal(prefixRes.ret.type, 'image');
 });

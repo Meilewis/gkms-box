@@ -671,6 +671,12 @@ function buildHifDeckHtml({ ownerLabel, idol, characters, result, dataDir }) {
     `${result.actCounts.consult}相谈 / ${result.actCounts.supply}支给 / ${result.actCounts.outing}外出` +
     (result.miniDrinkActive && result.miniDrinks > 0 ? ` · 小饮料+${result.miniDrinks}瓶` : '');
   const ratioShort = formatShortRatio(result.slotAttrs, result.slotCounts);
+  const rawCustomSummary = String(result.customSummary || '').trim();
+  const customChars = Array.from(rawCustomSummary);
+  const clippedSummary = customChars.length > 90 ? `${customChars.slice(0, 90).join('')}…` : rawCustomSummary;
+  const footerText = clippedSummary
+    ? `自定义参数：${clippedSummary} · HIF全局 +10%/+100 · 本战 140w/240w · 星耀 1335`
+    : '默认口径：HIF全局 +10%/+100 · 本战1 140w / 本战2 240w / 星耀 1335 / 回忆 +11.2% · 仅作配卡参考';
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -931,7 +937,7 @@ function buildHifDeckHtml({ ownerLabel, idol, characters, result, dataDir }) {
     </section>
 
     <footer class="footer">
-      默认口径：HIF全局 +10%/+100 · 本战1 140w / 本战2 240w / 星耀 1335 / 回忆 +11.2% · 仅作配卡参考
+      ${escapeHtml(footerText)}
     </footer>
   </div>
 </body>
