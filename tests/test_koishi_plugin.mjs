@@ -635,3 +635,147 @@ test('renderer.js: HTML 转义、请求拦截、超时关 page、过长拦截与
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// hif配卡 指令端到端校验（纯图片回复、6卡渲染、XSS转义、冷却与排队）
+// ---------------------------------------------------------------------------
+test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图、XSS 转义及冷却排队限制', async () => {
+  assert.deepEqual(Plugin.parseHifDeckCommand('hif配卡 姬崎莉波 ガラクタロード'), {
+    rawArg: '姬崎莉波 ガラクタロード',
+  });
+  assert.deepEqual(Plugin.parseHifDeckCommand('HIF 配卡 莉波 感性'), {
+    rawArg: '莉波 感性',
+  });
+  assert.deepEqual(Plugin.parseHifDeckCommand('hif配卡'), { rawArg: '' });
+
+  const db = createMockDb();
+  const capturedPages = [];
+  const ctx = createMockCtx(db, { cooldownSeconds: 60, boxQueryRecallSeconds: 30 }, () => {
+    const p = createFakePage({ boundingBox: { x: 0, y: 0, width: 1200, height: 960 } });
+    capturedPages.push(p);
+    return p;
+  });
+
+  // 1. 未绑定用户先提示绑定
+  const unbindRes = await ctx.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード'));
+  assert.equal(unbindRes.nextCalled, false);
+  assert.equal(unbindRes.ret.type, 'text');
+  assert.match(unbindRes.ret.attrs.content, /还没有绑定支援卡 BOX/);
+
+  // 2. 绑定真实 Base64 BOX（使用含 XSS 的昵称）
+  const realB64 =
+    'My0xMjItNCwzLTExNC0xLDMtMTEwLTQsMy0xMDctNCwzLTk2LTEsMy05NC0xLDMtOTItMCwzLTkwLTAsMy04OS0xLDMtODMtMSwzLTgyLTEsMy04MS0xLDMtNzktMSwzLTc4LTEsMy03Ni0wLDMtNzAtMCwzLTY5LTQsMy02Ni00LDMtNjQtNCwzLTYyLTAsMy01OC0zLDMtNTctMCwzLTU1LTAsMy00Ni0wLDMtNDQtMCwzLTQyLTAsMy0zNy0wLDMtMzUtMCwzLTM0LTMsMy0zMS0wLDMtMjgtMSwzLTI3LTMsMy0yNS00LDMtMjQtMCwzLTIyLTEsMy0xOC0wLDMtMTctMCwzLTE2LTAsMy0xMy0wLDMtMTItMSwzLTExLTIsMy05LTQsMy03LTQsMy02LTAsMy01LTQsMy00LTAsMy0zLTAsMy0yLTQsMy0wLTAsMi04Mi0wLDItODEtMCwyLTcyLTQsMi02OC0wLDItNjEtNCwyLTQzLTQsMi03LTQsMi0zLTQsMi0xLTQ=';
+  await db.upsert('gkms_box_binding', [
+    {
+      userKey: 'qq:u100',
+      shortCode: '',
+      supportCode: realB64,
+      cidolCode: '',
+      supportCount: 58,
+      cidolCount: 0,
+      updatedAt: new Date(),
+    },
+  ]);
+
+  // 2a. 缺少卡名且多流派时仅给文字引导，且不扣冷却
+  const askPlanRes = await ctx.dispatch(createSession('hif配卡 姬崎莉波'));
+  assert.equal(askPlanRes.ret.type, 'text');
+  assert.match(askPlanRes.ret.attrs.content, /流派/);
+
+  // 2b. 正常命中：严格只发送一张图片（无任何 text 元素或可选项）
+  const sessOk = createSession('hif配卡 姬崎莉波 ガラクタロード', {
+    author: { nick: '<script>alert(1)</script>' },
+  });
+  const okRes = await ctx.dispatch(sessOk);
+  assert.equal(okRes.nextCalled, false);
+  assert.equal(okRes.ret, undefined);
+  assert.equal(sessOk.sent.length, 1);
+  const sentPayload = sessOk.sent[0];
+  assert.equal(Array.isArray(sentPayload), false, '不得返回含文字的多元素数组');
+  assert.equal(sentPayload.type, 'image');
+  assert.ok(Buffer.isBuffer(sentPayload.attrs.data));
+
+  const html = capturedPages[0].handlers.html;
+  const cardMatches = html.match(/class="h-card /g) || [];
+  assert.equal(cardMatches.length, 6, '拼图必须严格展示 6 张支援卡');
+  assert.ok(html.includes('借 · 满破'), '拼图必须包含借卡标识');
+  assert.ok(html.includes('33966'), '拼图必须包含精准预计 HIF 总评 33966');
+  assert.ok(html.includes('ガラクタロード'), '拼图必须包含目标 P 卡名');
+  assert.equal(html.includes('<script>alert(1)</script>'), false, '昵称 XSS 必须被转义');
+  assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+
+  // 2c. 冷却中再次请求应拦截
+  const cdRes = await ctx.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード'));
+  assert.equal(cdRes.ret.type, 'text');
+  assert.match(cdRes.ret.attrs.content, /冷却中/);
+
+  // 3. recallSeconds=0 时直接返回单个 image 元素（不含 text）
+  const ctxNoRecall = createMockCtx(db, { cooldownSeconds: 0, boxQueryRecallSeconds: 0 }, () =>
+    createFakePage({ boundingBox: { x: 0, y: 0, width: 1200, height: 960 } })
+  );
+  const directRes = await ctxNoRecall.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード'));
+  assert.equal(directRes.ret.type, 'image');
+  assert.equal(Array.isArray(directRes.ret), false);
+
+  // 4. 渲染异常时自动退还冷却（立即重试可直接触发渲染）
+  let failNext = true;
+  const ctxFail = createMockCtx(db, { cooldownSeconds: 60, boxQueryRecallSeconds: 0 }, async () => {
+    if (failNext) throw new Error('render crashed');
+    return createFakePage({ boundingBox: { x: 0, y: 0, width: 1200, height: 960 } });
+  });
+  const errRes = await ctxFail.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード'));
+  assert.equal(errRes.ret.type, 'text');
+  assert.match(errRes.ret.attrs.content, /暂时失败/);
+
+  failNext = false;
+  const retryRes = await ctxFail.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード'));
+  assert.equal(retryRes.ret.type, 'image');
+
+  // 5. hif配卡 同样受 MAX_RENDER_PENDING (>=4) 排队拦截且不扣冷却
+  for (let i = 1; i <= 5; i += 1) {
+    await db.upsert('gkms_box_binding', [
+      {
+        userKey: `qq:hq${i}`,
+        shortCode: '',
+        supportCode: realB64,
+        cidolCode: '',
+        supportCount: 58,
+        cidolCount: 0,
+        updatedAt: new Date(),
+      },
+    ]);
+  }
+  let releaseQ;
+  const gateQ = new Promise((r) => {
+    releaseQ = r;
+  });
+  let notifyEnterQ;
+  const enterQ = new Promise((r) => {
+    notifyEnterQ = r;
+  });
+  let firstQ = true;
+  const ctxQueue = createMockCtx(db, { cooldownSeconds: 60, boxQueryRecallSeconds: 0 }, async () => {
+    if (firstQ) {
+      firstQ = false;
+      notifyEnterQ();
+      await gateQ;
+    }
+    return createFakePage({ boundingBox: { x: 0, y: 0, width: 1200, height: 960 } });
+  });
+  const qp1 = ctxQueue.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'hq1' }));
+  const qp2 = ctxQueue.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'hq2' }));
+  const qp3 = ctxQueue.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'hq3' }));
+  const qp4 = ctxQueue.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'hq4' }));
+  try {
+    await enterQ;
+    await new Promise((r) => setTimeout(r, 10));
+    const qp5 = await ctxQueue.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'hq5' }));
+    assert.equal(qp5.ret.type, 'text');
+    assert.match(qp5.ret.attrs.content, /排队较多/);
+  } finally {
+    releaseQ();
+    await Promise.allSettled([qp1, qp2, qp3, qp4]);
+  }
+  const q5After = await ctxQueue.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'hq5' }));
+  assert.equal(q5After.ret.type, 'image');
+});

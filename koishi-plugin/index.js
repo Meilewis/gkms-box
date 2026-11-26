@@ -5,6 +5,7 @@ const path = require('path');
 const { Schema, h } = require('koishi');
 const Codec = require('./codec');
 const renderer = require('./renderer');
+const HifPlanner = require('./hif-planner');
 
 const name = 'gkms-box';
 const inject = ['database', 'puppeteer'];
@@ -19,15 +20,15 @@ const CHAR_ALIASES = {
   atbm: ['atbm', '雨夜燕', '雨夜', '燕'],
   fktn: ['fktn', '藤田琴音', '藤田', '琴音'],
   hkne: ['hkne', '冰渡香名江', '冰渡', '香名江'],
-  hmsz: ['hmsz', '秦谷美铃', '秦谷', '美铃'],
-  hrnm: ['hrnm', '姬崎莉波', '姬崎', '莉波'],
+  hmsz: ['hmsz', '秦谷美铃', '秦谷美鈴', '秦谷', '美铃'],
+  hrnm: ['hrnm', '姬崎莉波', '姫崎莉波', '姬崎', '姫崎', '莉波'],
   hski: ['hski', '花海咲季', '咲季', '大佑芽'],
   hume: ['hume', '花海佑芽', '佑芽'],
   jsna: ['jsna', '十王星南', '十王', '星南', '会长'],
-  kcna: ['kcna', '仓本千奈', '仓本', '千奈'],
-  kllj: ['kllj', '葛城莉莉娅', '葛城', '莉莉娅'],
-  shro: ['shro', '筱泽广', '篠澤広', '筱泽', '广', 'hiro'],
-  ssmk: ['ssmk', '紫云清夏', '紫云', '清夏'],
+  kcna: ['kcna', '仓本千奈', '倉本千奈', '仓本', '千奈'],
+  kllj: ['kllj', '葛城莉莉娅', '葛城リーリヤ', '葛城', '莉莉娅', '莉莉亚'],
+  shro: ['shro', '筱泽广', '篠澤広', '篠泽广', '篠泽', '筱泽', '广', 'hiro'],
+  ssmk: ['ssmk', '紫云清夏', '紫雲清夏', '紫云', '清夏'],
   ttmr: ['ttmr', '月村手毬', '月村', '手毬', '手球'],
 };
 
@@ -252,6 +253,37 @@ function parseBindCommand(plainText) {
   return null;
 }
 
+function parseHifDeckCommand(plainText) {
+  const m = /^hif\s*配卡(?:\s*([\s\S]*))?$/i.exec(String(plainText || '').trim());
+  if (!m) return null;
+  return { rawArg: String(m[1] || '').trim() };
+}
+
+function buildFullSupportBoxLbs(supportCatalog, supportMap) {
+  const boxLbs = {};
+  for (const c of supportCatalog || []) {
+    boxLbs[c.key] = -1;
+  }
+  for (const [k, lb] of Object.entries(supportMap || {})) {
+    boxLbs[k] = lb;
+  }
+  return boxLbs;
+}
+
+function formatHifResolveError(resolved, botName) {
+  if (!resolved || resolved.reason === 'empty') {
+    return `请附上 P 卡名称或「角色名 + 流派」，例如：@${botName} hif配卡 姬崎莉波 ガラクタロード`;
+  }
+  if (resolved.reason === 'need_plan_or_card') {
+    const example = resolved.sampleCardName || '感性';
+    return `请补充【${resolved.characterName}】的流派（感性/理性/非凡）或具体 P 卡名，例如：@${botName} hif配卡 ${resolved.characterName} ${example}`;
+  }
+  if (resolved.reason === 'ambiguous_name') {
+    return `【${truncateText(resolved.query, 24)}】对应多张不同角色或流派的 P 卡，请加上角色名，例如：${resolved.examples.join(' / ')}`;
+  }
+  return `未找到匹配「${truncateText(resolved.query, 24)}」的 P 卡，请检查卡名或发送「角色名 + 卡名/流派」。`;
+}
+
 function buildHelpMessage(config, catalog) {
   const bot = config.botDisplayName || 'Bot';
   const lines = [
@@ -266,6 +298,7 @@ function buildHelpMessage(config, catalog) {
     `3. @${bot} 查box / 晒box — 生成自己的持卡统计与拼图（30 秒后自动撤回）`,
     `4. @${bot} 查box 支援卡 / P卡 / 筱泽广 — 按分类或偶像查看自己的 BOX（仅支持查自己）`,
     `5. @${bot} 解绑box — 清除已绑定的数据`,
+    `6. @${bot} hif配卡 <P卡名/角色+流派> — 根据已绑定的 BOX 生成最优 6 配卡拼图`,
     '',
     `当前收录：支援卡 ${catalog.support.length} 张 · P卡与皮肤 ${catalog.cidol.length} 项`,
   ];
@@ -453,6 +486,19 @@ function apply(ctx, config) {
     return;
   }
 
+  let hifEngine = null;
+  try {
+    hifEngine = HifPlanner.loadHifEngine(dataDir);
+    logger.info(
+      '已加载 HIF 配卡算分引擎：%d 张支援卡公式 (%d/%d 线性校验通过)',
+      hifEngine.cardCount,
+      hifEngine.verifiedCount,
+      hifEngine.totalChecks
+    );
+  } catch (err) {
+    logger.warn('加载 HIF 配卡算分引擎失败（hif配卡功能暂不可用）：%s', err.message);
+  }
+
   ctx.model.extend(
     'gkms_box_binding',
     {
@@ -487,8 +533,9 @@ function apply(ctx, config) {
     const bindCmd = isHelp ? null : parseBindCommand(plainText);
     const queryMatch = /^(?:查|晒)\s*box(?:\s+([\s\S]*))?$/i.exec(plainText);
     const unbindMatch = /^解绑\s*box$/i.test(plainText);
+    const hifCmd = isHelp || bindCmd || queryMatch || unbindMatch ? null : parseHifDeckCommand(plainText);
 
-    if (!isHelp && !bindCmd && !queryMatch && !unbindMatch) {
+    if (!isHelp && !bindCmd && !queryMatch && !unbindMatch && !hifCmd) {
       return next();
     }
 
@@ -707,8 +754,9 @@ function apply(ctx, config) {
         return textReply(`${ownerLabel} 绑定的 BOX 目前为空。`);
       }
 
+      const isBypass = Boolean(session && session._adminBypass);
       const cdMs = (config.cooldownSeconds || 0) * 1000;
-      if (cdMs > 0) {
+      if (!isBypass && cdMs > 0) {
         const lastTs = renderCooldowns.get(userKey) || 0;
         const diff = Date.now() - lastTs;
         if (diff < cdMs) {
@@ -721,7 +769,7 @@ function apply(ctx, config) {
         return textReply('当前查box排队较多，请稍后再试。');
       }
 
-      if (cdMs > 0) {
+      if (!isBypass && cdMs > 0) {
         renderCooldowns.set(userKey, Date.now());
       }
 
@@ -795,6 +843,118 @@ function apply(ctx, config) {
       );
     }
 
+    if (hifCmd) {
+      if (!hifEngine) {
+        return textReply('HIF 配卡数据尚未加载，请联系管理员检查 hif_cards.json 数据文件。');
+      }
+      if (!hifCmd.rawArg) {
+        return textReply(formatHifResolveError({ reason: 'empty' }, botName));
+      }
+
+      const targetAt = extractTargetMention(session);
+      if ((targetAt && String(targetAt.id) !== userId) || /[@＠]\S+/.test(hifCmd.rawArg)) {
+        return textReply('为了保护隐私，仅支持根据自己的 BOX 生成 HIF 配卡哦。');
+      }
+
+      const ownerLabel = truncateText(
+        (session.author && (session.author.nick || session.author.name)) ||
+          session.username ||
+          '当前制作人',
+        32
+      );
+
+      const rows = await ctx.database.get('gkms_box_binding', { userKey });
+      if (!rows.length || !rows[0].supportCode) {
+        return textReply(
+          `你还没有绑定支援卡 BOX 哦，请先发送「@${botName} 绑定 <代码>」完成绑定。`
+        );
+      }
+
+      const binding = rows[0];
+      const decSup = Codec.decodeSupportBox(binding.supportCode || '', catalog.supportByKey);
+      const decCid = Codec.decodeCidolBox(binding.cidolCode || '', catalog.cidolByKey);
+      if (!decSup.ok || !decSup.items.length) {
+        return textReply('你绑定的支援卡数据无效或为空，请重新发送「绑定 <代码>」更新 BOX。');
+      }
+      const cidolSet = decCid.ok ? decCid.set : {};
+
+      const resolved = HifPlanner.resolveIdolForHif(hifCmd.rawArg, catalog, cidolSet, CHAR_ALIASES);
+      if (!resolved.ok) {
+        return textReply(formatHifResolveError(resolved, botName));
+      }
+
+      const isBypass = Boolean(session && session._adminBypass);
+      const cdMs = (config.cooldownSeconds || 0) * 1000;
+      if (!isBypass && cdMs > 0) {
+        const lastTs = renderCooldowns.get(userKey) || 0;
+        const diff = Date.now() - lastTs;
+        if (diff < cdMs) {
+          const remain = Math.ceil((cdMs - diff) / 1000);
+          return textReply(`拼图正在冷却中，请 ${remain} 秒后再试。`);
+        }
+      }
+
+      if (renderer.getPendingRenderCount() >= MAX_RENDER_PENDING) {
+        return textReply('当前生成排队较多，请稍后再试。');
+      }
+
+      if (!isBypass && cdMs > 0) {
+        renderCooldowns.set(userKey, Date.now());
+      }
+
+      const boxLbs = buildFullSupportBoxLbs(catalog.support, decSup.map);
+      const solved = HifPlanner.solveBestHifDeck(resolved.idol, boxLbs, hifEngine, catalog.supportByKey);
+      if (!solved.ok) {
+        renderCooldowns.delete(userKey);
+        return textReply(solved.error);
+      }
+
+      let rendered;
+      try {
+        rendered = await renderer.renderHifDeckImage({
+          getPage: () => ctx.puppeteer.page(),
+          dataDir,
+          htmlPayload: {
+            ownerLabel,
+            idol: resolved.idol,
+            characters: catalog.characters,
+            result: solved.result,
+          },
+        });
+      } catch (err) {
+        renderCooldowns.delete(userKey);
+        logger.error('HIF 配卡拼图渲染失败：%s', err && err.stack ? err.stack : err);
+        return textReply('HIF 配卡拼图生成暂时失败，请稍后重试。');
+      }
+
+      if (!rendered || !rendered.buffer || rendered.oversized) {
+        renderCooldowns.delete(userKey);
+        return textReply('HIF 配卡拼图体积过大，请稍后重试。');
+      }
+
+      logger.info(
+        '[%s] HIF配卡完成 idol=%s rating=%d size=%d bytes (q=%d, scale=%s)',
+        userKey,
+        resolved.idol.key,
+        solved.result.rating.finalRating,
+        rendered.buffer.length,
+        rendered.quality,
+        rendered.scale
+      );
+
+      // 回复严格只发一张 6 配卡拼图，不附加文字或可选项
+      const hifPayload = h.image(rendered.buffer, 'image/jpeg', { title: 'gkms_hif_deck.jpg' });
+      return await sendAndAutoRecall(
+        ctx,
+        session,
+        hifPayload,
+        config.boxQueryRecallSeconds,
+        logger,
+        'hif配卡 拼图',
+        'HIF 配卡拼图发送失败，请稍后重试。'
+      );
+    }
+
     return next();
   });
 }
@@ -812,6 +972,7 @@ module.exports = {
   resolveCharacterFilter,
   parseQueryArgs,
   parseBindCommand,
+  parseHifDeckCommand,
   formatSummaryText,
   fetchShortBindRecord,
   sendAndAutoRecall,

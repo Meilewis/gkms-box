@@ -506,7 +506,7 @@
       tip.innerHTML =
         `操作提示：点击卡片 <strong>左半边</strong> 降级，<strong>右半边</strong> 升级；或点上方「📷 截图导入 S卡」（支持长图与分段截图）。${imgStatus}`;
     } else {
-      tip.innerHTML = `操作提示：点击角色卡即可切换持有状态，点顶部统计条中的偶像名可快速筛出该角色。${imgStatus}`;
+      tip.innerHTML = `操作提示：点击角色卡即可切换持有状态，点卡片下方「复制配卡指令」可一键复制 HIF 配卡指令发给机器人，点顶部统计条中的偶像名可快速筛出该角色。${imgStatus}`;
     }
   }
 
@@ -628,6 +628,9 @@
                  <div class="vector-card-sub">${escapeHtml(charName)} · ${escapeHtml(s.plan)}</div>
                </div>`;
 
+          const targetName = s.isSkinVariant && s.baseName ? s.baseName : s.name;
+          const hifCmd = `hif配卡 ${charName} ${targetName}`;
+
           return `
             <div class="c-card ${owned ? 'is-owned' : 'is-unowned'}" data-c-card="${escapeHtml(s.key)}">
               <div class="c-card-media">
@@ -643,14 +646,42 @@
                   <span class="c-plan-tag plan-badge-${escapeHtml(s.plan)}">${escapeHtml(s.plan)}</span>
                 </div>
                 <div class="c-skin-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>
+                <button
+                  type="button"
+                  class="c-hif-copy-btn"
+                  data-copy-hif="${escapeHtml(hifCmd)}"
+                  title="复制指令：${escapeHtml(hifCmd)}"
+                >📋 复制配卡指令</button>
               </div>
             </div>
           `;
         })
         .join('');
 
+      grid.querySelectorAll('[data-copy-hif]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const cmd = btn.getAttribute('data-copy-hif') || '';
+          const ok = await copyClipboard(cmd);
+          if (ok) {
+            showToast(`已复制：${cmd}`);
+            if (btn._copyTimer) clearTimeout(btn._copyTimer);
+            btn.classList.add('is-copied');
+            btn.textContent = '✓ 已复制';
+            btn._copyTimer = setTimeout(() => {
+              btn.classList.remove('is-copied');
+              btn.textContent = '📋 复制配卡指令';
+              btn._copyTimer = null;
+            }, 1400);
+          } else {
+            showToast(`复制失败，请手动复制：${cmd}`, 4000);
+          }
+        });
+      });
+
       grid.querySelectorAll('[data-c-card]').forEach((cardEl) => {
-        cardEl.addEventListener('click', () => {
+        cardEl.addEventListener('click', (e) => {
+          if (e.target && e.target.closest('[data-copy-hif]')) return;
           const key = cardEl.getAttribute('data-c-card');
           if (state.cidolOwned[key]) delete state.cidolOwned[key];
           else state.cidolOwned[key] = true;

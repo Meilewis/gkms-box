@@ -11,6 +11,7 @@ const MAX_SCALE = 1.5;
 const MIN_SCALE = 0.5;
 const MAX_OUTPUT_HEIGHT_PX = 15000;
 const DATA_URL_CACHE_MAX_CHARS = 96 * 1024 * 1024;
+const HIF_CANVAS_WIDTH = 1200;
 
 let renderQueue = Promise.resolve();
 let pendingRenderCount = 0;
@@ -508,6 +509,439 @@ function buildRenderHtml({
 </html>`;
 }
 
+function formatShortRatio(slotAttrs, slotCounts) {
+  const attrShort = { 1: '红', 2: '蓝', 3: '黄' };
+  const parts = [];
+  for (let i = 0; i < 3; i += 1) {
+    if (slotCounts[i] > 0) parts.push(`${slotCounts[i]}${attrShort[slotAttrs[i]]}`);
+  }
+  return parts.join(' / ');
+}
+
+function summarizeSpPlan(spSeq, slotAttrs) {
+  const attrShort = { 1: '红', 2: '蓝', 3: '黄' };
+  const days = ['2日', '4日', '9日', '11日', '15日', '18日', '本战2', '本战5'];
+  const counts = [0, 0, 0];
+  for (let i = 0; i < 8; i += 1) {
+    counts[spSeq[i] - 1] += 1;
+  }
+  const activeSlots = [0, 1, 2].filter((i) => counts[i] > 0);
+  if (activeSlots.length === 1) {
+    const s = activeSlots[0];
+    return `全${attrShort[slotAttrs[s]]} 8 次`;
+  }
+  return days.map((d, i) => `${d}${attrShort[slotAttrs[spSeq[i] - 1]]}`).join(' · ');
+}
+
+function summarizeBizPlan(bizChoices, slotAttrs) {
+  const attrShort = { 1: '红', 2: '蓝', 3: '黄' };
+  const days = ['3', '6', '10', '17', '本战1', '本战4'];
+  const bySlot = [[], [], []];
+  for (let i = 0; i < 6; i += 1) {
+    bySlot[bizChoices[i]].push(days[i]);
+  }
+  const parts = [];
+  for (let s = 0; s < 3; s += 1) {
+    if (!bySlot[s].length) continue;
+    parts.push(`${attrShort[slotAttrs[s]]}×${bySlot[s].length} (${bySlot[s].join('/')}日)`);
+  }
+  return parts.join(' · ');
+}
+
+function buildHifDeckHtml({ ownerLabel, idol, characters, result, dataDir }) {
+  const nowStr = new Date().toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const charName = (characters && characters[idol.character]) || String(idol.character || '').toUpperCase();
+  const planZhMap = { Sense: '感性', Logic: '理性', Anomaly: '非凡' };
+  const planZh = planZhMap[idol.plan] || idol.plan || '';
+  const idolImgUrl = resolveCidolImageDataUrl(dataDir, idol);
+  const idolMediaHtml = idolImgUrl
+    ? `<img class="p-thumb-img" src="${idolImgUrl}" alt="">`
+    : `<div class="p-thumb-fallback plan-${escapeHtml(idol.plan)}">${escapeHtml(charName)}</div>`;
+
+  const attrMeta = {
+    1: { code: 'VO', cn: '红(Vo)', color: '#ef4444', fg: '#ffffff', bar: 'linear-gradient(90deg,#f87171,#ef4444)' },
+    2: { code: 'DA', cn: '蓝(Da)', color: '#3b82f6', fg: '#ffffff', bar: 'linear-gradient(90deg,#60a5fa,#3b82f6)' },
+    3: { code: 'VI', cn: '黄(Vi)', color: '#eab308', fg: '#1c1917', bar: 'linear-gradient(90deg,#fde047,#eab308)' },
+  };
+  const slotLabels = ['一属', '二属', '三属'];
+
+  const cardsHtml = result.cards
+    .map((item) => {
+      const keyParts = String(item.supportKey || '').split('-');
+      const fallbackCard = {
+        rarity: keyParts[0] || '3',
+        number: keyParts[1] || '0000',
+        name: item.rawName,
+        plan: idol.plan,
+      };
+      const supCard = item.supportCard || fallbackCard;
+      const rarity = supCard.rarity || fallbackCard.rarity;
+      const rarityCls = rarity === '3' ? 'r-3' : rarity === '2' ? 'r-2' : 'r-1';
+      const rarityText = rarity === '3' ? 'SSR' : rarity === '2' ? 'SR' : 'R';
+      const baseLv = rarity === '3' ? 40 : 30;
+      const lvText = `LV.${baseLv + item.lb * 5}`;
+      const am = attrMeta[item.attr] || attrMeta[1];
+      const imgUrl = resolveSupportImageDataUrl(dataDir, supCard);
+      const media = imgUrl
+        ? `<img class="card-img" src="${imgUrl}" alt="">`
+        : `<div class="fallback-art plan-${escapeHtml(supCard.plan || 'Common')}">
+             <div class="fallback-title">${escapeHtml(item.rawName)}</div>
+             <div class="fallback-sub">#${escapeHtml(supCard.number)}</div>
+           </div>`;
+
+      const cardCls = item.borrowed ? 'is-borrowed' : item.lb === 4 ? 'is-max' : '';
+      const lbLabel = item.borrowed ? '借 · 4破' : `${item.lb}破 · ${lvText}`;
+      const gainText = item.pct > 0 ? `固值${item.flat} · +${item.pct}%` : `固值${item.flat}`;
+
+      return `
+        <div class="h-card ${cardCls}">
+          ${media}
+          <div class="top-badges">
+            <div class="badge-group">
+              <span class="badge-rarity ${rarityCls}">${rarityText}</span>
+              ${item.borrowed ? '<span class="badge-borrow">借 · 满破</span>' : ''}
+            </div>
+            <div class="badge-group">
+              ${item.isSp ? '<span class="badge-sp">SP</span>' : ''}
+              <span class="badge-attr" style="background:${am.color};color:${am.fg}">${am.code}</span>
+            </div>
+          </div>
+          <div class="h-bottom">
+            <div class="h-row-top">
+              <span class="h-name">${escapeHtml(item.rawName)}</span>
+            </div>
+            <div class="h-row-sub">
+              <span class="h-lb ${item.borrowed ? 'borrowed' : item.lb === 4 ? 'max' : ''}">${escapeHtml(lbLabel)}</span>
+              <span class="h-gain">${escapeHtml(gainText)}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const statsHtml = result.slotAttrs
+    .map((attr, idx) => {
+      const am = attrMeta[attr] || attrMeta[1];
+      const capVal = result.cappedStats[idx];
+      const rawVal = result.rawStats[idx];
+      const pct = result.totalPct[idx];
+      const supPct = round2FloorStr(result.supPctSum[idx]);
+      const barPct = Math.min(100, Math.round((capVal / 3200) * 100));
+      const overflow = rawVal > 3200 ? rawVal - 3200 : 0;
+      const line = [1960, 1307, 1089][idx];
+      const statusBadge =
+        overflow > 0
+          ? `<span class="stat-pill warn">溢出 +${overflow}</span>`
+          : capVal < line
+            ? `<span class="stat-pill warn">低于线 ${line}</span>`
+            : `<span class="stat-pill ok">达标</span>`;
+      return `
+        <div class="attr-panel">
+          <div class="attr-head">
+            <span class="attr-title"><i class="attr-dot" style="background:${am.color}"></i>${slotLabels[idx]} · ${am.cn}</span>
+            ${statusBadge}
+          </div>
+          <div class="attr-val-row">
+            <span class="attr-val">${capVal}</span>
+            <span class="attr-pct">总加成 ${pct}% <small>(卡+${supPct}%)</small></span>
+          </div>
+          <div class="attr-bar-track">
+            <div class="attr-bar-fill" style="width:${barPct}%;background:${am.bar}"></div>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const spSummary = summarizeSpPlan(result.spSeq, result.slotAttrs);
+  const attrShort = { 1: '红', 2: '蓝', 3: '黄' };
+  const examSummary = `一测→${attrShort[result.slotAttrs[result.examTargets[0]]]} · 二测→${attrShort[result.slotAttrs[result.examTargets[1]]]} · 三测→${attrShort[result.slotAttrs[result.examTargets[2]]]}`;
+  const bizSummary = summarizeBizPlan(result.bizChoices, result.slotAttrs);
+  const freeSummary =
+    `${result.actCounts.consult}相谈 / ${result.actCounts.supply}支给 / ${result.actCounts.outing}外出` +
+    (result.miniDrinkActive && result.miniDrinks > 0 ? ` · 小饮料+${result.miniDrinks}瓶` : '');
+  const ratioShort = formatShortRatio(result.slotAttrs, result.slotCounts);
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: ${HIF_CANVAS_WIDTH}px;
+    background: #070b14;
+    color: #f8fafc;
+    font-family: "Noto Sans CJK SC", "Noto Sans CJK JP", "WenQuanYi Micro Hei", sans-serif;
+  }
+  #canvas-root {
+    width: ${HIF_CANVAS_WIDTH}px;
+    padding: 22px 24px 16px;
+    background: radial-gradient(circle at 8% 0%, rgba(56, 189, 248, 0.16), transparent 36%),
+      radial-gradient(circle at 92% 6%, rgba(236, 72, 153, 0.15), transparent 38%),
+      #070b14;
+  }
+  .header-card {
+    background: linear-gradient(135deg, #111c3a 0%, #1d1338 100%);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 16px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 18px;
+  }
+  .h-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+  }
+  .p-thumb {
+    width: 68px;
+    height: 90px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 2px solid rgba(56, 189, 248, 0.6);
+    background: #0f172a;
+    flex-shrink: 0;
+  }
+  .p-thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .p-thumb-fallback {
+    width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800; color: #e2e8f0; text-align: center; padding: 4px;
+  }
+  .h-badge {
+    font-size: 11px; font-weight: 800; letter-spacing: 0.14em; color: #38bdf8; margin-bottom: 5px;
+  }
+  .h-title-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .h-title {
+    font-size: 24px; font-weight: 900; color: #ffffff; line-height: 1.2;
+  }
+  .plan-pill {
+    font-size: 12px; font-weight: 800; padding: 2px 10px; border-radius: 99px;
+  }
+  .p-Sense { background: rgba(251, 113, 133, 0.24); color: #fda4af; border: 1px solid rgba(251, 113, 133, 0.4); }
+  .p-Logic { background: rgba(56, 189, 248, 0.24); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.4); }
+  .p-Anomaly { background: rgba(192, 132, 252, 0.24); color: #d8b4fe; border: 1px solid rgba(192, 132, 252, 0.4); }
+  .h-owner { margin-top: 6px; font-size: 13px; color: #cbd5e1; }
+  .h-stats { display: flex; gap: 12px; flex-shrink: 0; }
+  .stat-box {
+    background: rgba(2, 6, 23, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 12px;
+    padding: 10px 16px;
+    min-width: 175px;
+  }
+  .stat-box.highlight {
+    border-color: rgba(250, 204, 21, 0.48);
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.88), rgba(49, 24, 59, 0.65));
+  }
+  .stat-k { font-size: 11px; color: #94a3b8; font-weight: 700; }
+  .stat-v { font-size: 26px; font-weight: 900; color: #38bdf8; margin-top: 2px; line-height: 1.1; }
+  .stat-box.highlight .stat-v { color: #fde047; }
+  .stat-s { font-size: 11px; color: #cbd5e1; margin-top: 3px; }
+
+  .deck-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .h-card {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 2px solid rgba(56, 189, 248, 0.55);
+    background: #0f172a;
+  }
+  .h-card.is-max {
+    border-color: #fbbf24;
+    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.45);
+  }
+  .h-card.is-borrowed {
+    border-color: #f472b6;
+    box-shadow: 0 0 16px rgba(236, 72, 153, 0.35), 0 0 0 1px rgba(251, 191, 36, 0.55);
+  }
+  .card-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .fallback-art {
+    width: 100%; height: 100%; padding: 14px;
+    display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;
+  }
+  .plan-Sense { background: linear-gradient(135deg, #2f1223 0%, #14172c 100%); }
+  .plan-Logic { background: linear-gradient(135deg, #0d2842 0%, #111b33 100%); }
+  .plan-Anomaly { background: linear-gradient(135deg, #291342 0%, #171433 100%); }
+  .plan-Common { background: linear-gradient(135deg, #0c2e28 0%, #121c31 100%); }
+  .fallback-title { font-size: 14px; font-weight: 800; color: #f8fafc; line-height: 1.3; }
+  .fallback-sub { margin-top: 4px; font-size: 11px; color: #94a3b8; font-weight: 700; }
+
+  .top-badges {
+    position: absolute; top: 8px; left: 9px; right: 9px;
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  }
+  .badge-group { display: flex; align-items: center; gap: 5px; }
+  .badge-rarity { font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 6px; }
+  .r-3 { background: linear-gradient(135deg, #22d3ee, #6366f1, #ec4899); color: #fff; }
+  .r-2 { background: #eab308; color: #271502; }
+  .r-1 { background: #cbd5e1; color: #0f172a; }
+  .badge-borrow {
+    font-size: 11px; font-weight: 900; padding: 2px 9px; border-radius: 6px;
+    background: linear-gradient(135deg, #ec4899, #f59e0b); color: #fff;
+    box-shadow: 0 2px 8px rgba(236, 72, 153, 0.5);
+  }
+  .badge-sp {
+    font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 6px;
+    background: #06b6d4; color: #042f2e;
+  }
+  .badge-attr { font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 6px; }
+
+  .h-bottom {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 24px 11px 8px;
+    background: linear-gradient(to top, rgba(2, 6, 23, 0.96) 30%, rgba(2, 6, 23, 0.7) 75%, transparent);
+  }
+  .h-row-top { display: flex; align-items: center; margin-bottom: 3px; }
+  .h-name {
+    font-size: 13px; font-weight: 800; color: #f8fafc;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  }
+  .h-row-sub { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .h-lb { font-size: 14px; font-weight: 900; font-style: italic; color: #e2e8f0; }
+  .h-lb.max { color: #fde047; }
+  .h-lb.borrowed { color: #f9a8d4; }
+  .h-gain {
+    font-size: 11px; font-weight: 800; color: #7dd3fc;
+    background: rgba(15, 23, 42, 0.85); padding: 2px 7px; border-radius: 5px;
+    border: 1px solid rgba(56, 189, 248, 0.25);
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .attr-panel {
+    background: rgba(15, 23, 42, 0.78);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    padding: 10px 14px;
+  }
+  .attr-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+  .attr-title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: #e2e8f0; }
+  .attr-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .stat-pill { font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 99px; }
+  .stat-pill.ok { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+  .stat-pill.warn { background: rgba(239, 68, 68, 0.24); color: #fca5a5; }
+  .attr-val-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .attr-val { font-size: 20px; font-weight: 900; color: #ffffff; }
+  .attr-pct { font-size: 11px; font-weight: 700; color: #94a3b8; }
+  .attr-pct small { color: #cbd5e1; font-size: 11px; }
+  .attr-bar-track { height: 6px; border-radius: 99px; background: rgba(30, 41, 59, 0.9); overflow: hidden; }
+  .attr-bar-fill { height: 100%; border-radius: 99px; }
+
+  .route-bar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .route-item {
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 10px;
+    padding: 8px 12px;
+  }
+  .route-k { font-size: 10px; font-weight: 800; color: #94a3b8; margin-bottom: 3px; }
+  .route-v { font-size: 12px; font-weight: 800; color: #f1f5f9; line-height: 1.35; }
+
+  .footer {
+    text-align: center; font-size: 11px; color: #64748b;
+    padding-top: 8px; border-top: 1px solid rgba(148, 163, 184, 0.14);
+  }
+</style>
+</head>
+<body>
+  <div id="canvas-root">
+    <header class="header-card">
+      <div class="h-left">
+        <div class="p-thumb">${idolMediaHtml}</div>
+        <div>
+          <div class="h-badge">HIF OPTIMAL DECK · 优选6配卡推荐</div>
+          <div class="h-title-row">
+            <div class="h-title">${escapeHtml(charName)} · ${escapeHtml(idol.name)}</div>
+            <span class="plan-pill p-${escapeHtml(idol.plan)}">${escapeHtml(planZh)} ${escapeHtml(idol.plan)}</span>
+          </div>
+          <div class="h-owner">制作人：<strong>${escapeHtml(ownerLabel)}</strong> · 生成时间：${escapeHtml(nowStr)}</div>
+        </div>
+      </div>
+      <div class="h-stats">
+        <div class="stat-box highlight">
+          <div class="stat-k">预计 HIF 总评</div>
+          <div class="stat-v">${result.rating.finalRating}</div>
+          <div class="stat-s">${escapeHtml(result.borrowed)}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-k">有效三维 / 配比</div>
+          <div class="stat-v">${result.effectiveTotal}</div>
+          <div class="stat-s">配比 ${escapeHtml(ratioShort)} · 溢出 ${result.overflowLoss}</div>
+        </div>
+      </div>
+    </header>
+
+    <section class="deck-grid">
+      ${cardsHtml}
+    </section>
+
+    <section class="summary-grid">
+      ${statsHtml}
+    </section>
+
+    <section class="route-bar">
+      <div class="route-item">
+        <div class="route-k">8 天 SP 走法</div>
+        <div class="route-v">${escapeHtml(spSummary)}</div>
+      </div>
+      <div class="route-item">
+        <div class="route-k">3 次选拔控分</div>
+        <div class="route-v">${escapeHtml(examSummary)}</div>
+      </div>
+      <div class="route-item">
+        <div class="route-k">6 次营业选色</div>
+        <div class="route-v">${escapeHtml(bizSummary)}</div>
+      </div>
+      <div class="route-item">
+        <div class="route-k">自由日策略</div>
+        <div class="route-v">${escapeHtml(freeSummary)}</div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      默认口径：本战1 140w / 本战2 240w / 星耀 1335 / 回忆 +11.2% · 仅作配卡参考
+    </footer>
+  </div>
+</body>
+</html>`;
+}
+
+function round2FloorStr(n) {
+  return String(Math.round(Number(n || 0) * 100) / 100);
+}
+
 function floor2(n) {
   return Math.floor(n * 100) / 100;
 }
@@ -589,9 +1023,13 @@ async function shootWithQualities(page, clip, scale, qualities) {
 /**
  * 在已获取的页面上完成：请求拦截 → 1x 测量 → 按高度自适应缩放 → 逐级降质量截图
  */
-async function captureOnPage(page, html, { assetWaitMs = ASSET_WAIT_MS, contentTimeoutMs = RENDER_TIMEOUT_MS } = {}) {
+async function captureOnPage(
+  page,
+  html,
+  { assetWaitMs = ASSET_WAIT_MS, contentTimeoutMs = RENDER_TIMEOUT_MS, viewportWidth = 1400 } = {}
+) {
   await lockDownRequests(page);
-  await page.setViewport({ width: 1400, height: 900, deviceScaleFactor: 1 });
+  await page.setViewport({ width: viewportWidth, height: 900, deviceScaleFactor: 1 });
   await page.setContent(html, { waitUntil: 'load', timeout: contentTimeoutMs });
   await page.evaluate(async (waitMs) => {
     const ready = (async () => {
@@ -619,7 +1057,7 @@ async function captureOnPage(page, html, { assetWaitMs = ASSET_WAIT_MS, contentT
     throw new Error('拼图过长');
   }
 
-  await page.setViewport({ width: 1400, height: 900, deviceScaleFactor: scale });
+  await page.setViewport({ width: viewportWidth, height: 900, deviceScaleFactor: scale });
   const clip = await measureCanvasRoot(page);
   const firstPass = await shootWithQualities(page, clip, scale, [86, 76, 66, 56]);
   if (!firstPass.oversized) return firstPass;
@@ -627,14 +1065,13 @@ async function captureOnPage(page, html, { assetWaitMs = ASSET_WAIT_MS, contentT
   // 体积仍超限：降低缩放倍率再按更低质量重试
   const fallbackScale = Math.max(MIN_SCALE, floor2(Math.min(1, scale * 0.7)));
   if (fallbackScale >= scale) return firstPass;
-  await page.setViewport({ width: 1400, height: 900, deviceScaleFactor: fallbackScale });
+  await page.setViewport({ width: viewportWidth, height: 900, deviceScaleFactor: fallbackScale });
   const clip2 = await measureCanvasRoot(page);
   return shootWithQualities(page, clip2, fallbackScale, [74, 62, 52]);
 }
 
-async function renderBoxImage({ getPage, dataDir, htmlPayload, timeoutMs = RENDER_TIMEOUT_MS }) {
+async function renderHtmlWithLock({ getPage, html, viewportWidth = 1400, timeoutMs = RENDER_TIMEOUT_MS, label = 'BOX 拼图' }) {
   return withRenderLock(async () => {
-    const html = buildRenderHtml({ ...htmlPayload, dataDir });
     let page = null;
     let pageClosed = false;
     let timedOut = false;
@@ -651,9 +1088,9 @@ async function renderBoxImage({ getPage, dataDir, htmlPayload, timeoutMs = RENDE
       page = acquired;
       if (timedOut) {
         await closePageOnce();
-        throw new Error('BOX 拼图渲染超时（页面获取过慢）');
+        throw new Error(`${label}渲染超时（页面获取过慢）`);
       }
-      return captureOnPage(acquired, html, { contentTimeoutMs: timeoutMs });
+      return captureOnPage(acquired, html, { contentTimeoutMs: timeoutMs, viewportWidth });
     })();
     work.catch(() => {});
 
@@ -661,7 +1098,7 @@ async function renderBoxImage({ getPage, dataDir, htmlPayload, timeoutMs = RENDE
       timer = setTimeout(() => {
         timedOut = true;
         closePageOnce();
-        reject(new Error(`BOX 拼图渲染超时（${Math.round(timeoutMs / 1000)}s）`));
+        reject(new Error(`${label}渲染超时（${Math.round(timeoutMs / 1000)}s）`));
       }, timeoutMs);
     });
 
@@ -674,12 +1111,24 @@ async function renderBoxImage({ getPage, dataDir, htmlPayload, timeoutMs = RENDE
   });
 }
 
+async function renderBoxImage({ getPage, dataDir, htmlPayload, timeoutMs = RENDER_TIMEOUT_MS }) {
+  const html = buildRenderHtml({ ...htmlPayload, dataDir });
+  return renderHtmlWithLock({ getPage, html, viewportWidth: 1400, timeoutMs, label: 'BOX 拼图' });
+}
+
+async function renderHifDeckImage({ getPage, dataDir, htmlPayload, timeoutMs = RENDER_TIMEOUT_MS }) {
+  const html = buildHifDeckHtml({ ...htmlPayload, dataDir });
+  return renderHtmlWithLock({ getPage, html, viewportWidth: HIF_CANVAS_WIDTH, timeoutMs, label: 'HIF 配卡拼图' });
+}
+
 module.exports = {
   MAX_JPEG_BYTES,
   RENDER_TIMEOUT_MS,
   escapeHtml,
   buildRenderHtml,
+  buildHifDeckHtml,
   renderBoxImage,
+  renderHifDeckImage,
   getPendingRenderCount,
   fileToDataUrl,
   clearDataUrlCache,
