@@ -207,6 +207,15 @@
     return Codec.encodeSupportBox(entries);
   }
 
+  function getAllMaxSupportExportString() {
+    const entries = state.supportCatalog.map((card) => ({
+      rarity: card.rarity,
+      number: card.number,
+      breakLevel: 4,
+    }));
+    return Codec.encodeSupportBox(entries);
+  }
+
   function getCidolExportString() {
     const entries = Object.keys(state.cidolOwned)
       .map((key) => state.cidolByKey[key])
@@ -306,6 +315,9 @@
     }
     el('btnExportAllImg').disabled = supCount === 0 && cidCount === 0;
     el('btnShortCode').disabled = state.shortBusy || (!supCode && !cidCode);
+    if (el('btnCopyAllMaxSupport')) {
+      el('btnCopyAllMaxSupport').disabled = state.supportCatalog.length === 0;
+    }
   }
 
   function updateHifParamsPanelUi() {
@@ -1546,6 +1558,22 @@
       el('importTextarea').focus();
     });
     el('btnConfirmImport').addEventListener('click', handleImport);
+
+    if (el('btnCopyAllMaxSupport')) {
+      el('btnCopyAllMaxSupport').addEventListener('click', async () => {
+        const count = state.supportCatalog.length;
+        if (!count) return showToast('卡池目录尚未加载完成');
+        const code = getAllMaxSupportExportString();
+        if (!code) return showToast('生成全解锁 S卡代码失败');
+        const ok = await copyClipboard(code);
+        showToast(
+          ok
+            ? `已生成并复制全解锁 S卡代码（共 ${count} 张全 4 破，未改动当前 BOX）`
+            : '复制失败，请检查浏览器剪贴板权限',
+          3200
+        );
+      });
+    }
 
     el('btnOpenScreenshotImport').addEventListener('click', () => {
       resetScreenshotModalState();
