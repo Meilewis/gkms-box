@@ -56,6 +56,7 @@
         { key: 'B37', label: '删 A 卡', shortLabel: '删A卡', defaultVal: 3, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B37' },
         { key: 'B38', label: '变卡', shortLabel: '变卡', defaultVal: 3, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B38' },
         { key: 'B50', label: '买卡', shortLabel: '买卡', defaultVal: 5, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B50' },
+        { key: 'B41', label: '敲卡次数（指导）', shortLabel: '敲卡', defaultVal: 0, min: 0, max: 30, step: 1, type: 'int', actionKey: 'B41' },
         { key: 'B47', label: '道具获得', shortLabel: '道具获得', defaultVal: 6, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B47' },
       ],
     },
@@ -66,6 +67,7 @@
       items: [
         { key: 'B30', label: '营业次数', shortLabel: '营业', defaultVal: 6, min: 6, max: 6, step: 1, type: 'int', locked: true },
         { key: 'B32', label: '休息次数', shortLabel: '休息', defaultVal: 0, min: 0, max: 20, step: 1, type: 'int', actionKey: 'B32' },
+        { key: 'B46', label: '进特别指导次数', shortLabel: '特别指导', defaultVal: 0, min: 0, max: 10, step: 1, type: 'int', actionKey: 'B46' },
         { key: 'B39', label: '相谈买饮料', shortLabel: '相谈买饮料', defaultVal: 0, min: 0, max: 30, step: 1, type: 'int', actionKey: 'B39' },
         { key: 'B40', label: '除开S卡道具获得的所有饮料数量', shortLabel: '非S卡道具饮料', defaultVal: 20, min: 0, max: 60, step: 1, type: 'int', isBaseDrinks: true },
       ],

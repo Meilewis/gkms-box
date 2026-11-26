@@ -311,9 +311,11 @@ test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求�
 
   const HifParamsCodec = require(pluginCodecPath);
 
-  // 1. 全默认编码为空字符串，且默认三属回忆固值为 80 (4×20)
+  // 1. 全默认编码为空字符串，且默认三属回忆固值为 80 (4×20)，B41/B46 为 0
   const defaults = HifParamsCodec.getDefaultParams();
   assert.equal(defaults.mf3, 80);
+  assert.equal(defaults.B41, 0);
+  assert.equal(defaults.B46, 0);
   assert.equal(HifParamsCodec.encodeHifParams(defaults), '');
 
   // 2. 仅编码非默认修改项并无损回环解码
@@ -394,4 +396,47 @@ test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求�
   assert.equal(rTri.result.ratio, '2 / 4');
   assert.equal(rTri.result.trifoldDrinkActive, true);
   assert.equal(rTri.result.trifoldDrinks, 2);
+
+  // 7. B41(敲卡) 与 B46(特别指导) 独立覆盖生效、彼此互不影响，且正确给猫头鹰(3-0063)加分
+  const b41Code = HifParamsCodec.encodeHifParams({ ...defaults, B41: 6 });
+  const b41Dec = HifParamsCodec.decodeHifParams(b41Code);
+  assert.equal(b41Dec.ok, true);
+  assert.deepEqual(b41Dec.solveOptions.actionOverrides, { B41: 6 });
+
+  const b46Code = HifParamsCodec.encodeHifParams({ ...defaults, B46: 2 });
+  const b46Dec = HifParamsCodec.decodeHifParams(b46Code);
+  assert.equal(b46Dec.ok, true);
+  assert.deepEqual(b46Dec.solveOptions.actionOverrides, { B46: 2 });
+
+  const logicOwlBox = {
+    '3-0063': 4, // 猫头鹰 (Vi 理性，敲卡 B41 上限6 × 11 = +66)
+    '3-0092': 4, // Vi 理性
+    '3-0099': 4, // Vi 通用
+    '3-0105': 4, // Da 理性
+    '3-0094': 4, // Da 理性
+  };
+  const rOwl0 = HifPlanner.solveBestHifDeck(cidolByKey['amao-3-002'], logicOwlBox, engine, supportByKey);
+  const rOwl6 = HifPlanner.solveBestHifDeck(
+    cidolByKey['amao-3-002'],
+    logicOwlBox,
+    engine,
+    supportByKey,
+    b41Dec.solveOptions
+  );
+  const rOwlB46Only = HifPlanner.solveBestHifDeck(
+    cidolByKey['amao-3-002'],
+    logicOwlBox,
+    engine,
+    supportByKey,
+    b46Dec.solveOptions
+  );
+  assert.equal(rOwl0.ok, true);
+  assert.equal(rOwl6.ok, true);
+  assert.equal(rOwlB46Only.ok, true);
+  const owl0 = rOwl0.result.cards.find((c) => c.supportKey === '3-0063');
+  const owl6 = rOwl6.result.cards.find((c) => c.supportKey === '3-0063');
+  const owlB46 = rOwlB46Only.result.cards.find((c) => c.supportKey === '3-0063');
+  assert.ok(owl0 && owl6 && owlB46, '5 张测试 BOX 下猫头鹰应上阵');
+  assert.equal(owl6.flat - owl0.flat, 66, 'B41=6 应精确为猫头鹰增加 6×11=+66 固值');
+  assert.equal(owlB46.flat, owl0.flat, '仅改 B46 不应联动影响 B41 敲卡固值');
 });
