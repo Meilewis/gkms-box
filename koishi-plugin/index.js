@@ -942,17 +942,8 @@ function apply(ctx, config) {
         rendered.scale
       );
 
-      // 回复严格只发一张 6 配卡拼图，不附加文字或可选项
-      const hifPayload = h.image(rendered.buffer, 'image/jpeg', { title: 'gkms_hif_deck.jpg' });
-      return await sendAndAutoRecall(
-        ctx,
-        session,
-        hifPayload,
-        config.boxQueryRecallSeconds,
-        logger,
-        'hif配卡 拼图',
-        'HIF 配卡拼图发送失败，请稍后重试。'
-      );
+      // 回复严格只发一张 6 配卡拼图，且不自动撤回
+      return h.image(rendered.buffer, 'image/jpeg', { title: 'gkms_hif_deck.jpg' });
     }
 
     return next();

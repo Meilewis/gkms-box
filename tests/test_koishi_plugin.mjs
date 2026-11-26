@@ -682,15 +682,29 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
   assert.equal(askPlanRes.ret.type, 'text');
   assert.match(askPlanRes.ret.attrs.content, /流派/);
 
-  // 2b. 正常命中：严格只发送一张图片（无任何 text 元素或可选项）
+  // 2b. 正常命中：严格只返回一张图片，且即使配置了 boxQueryRecallSeconds 也不会自动撤回
+  let deleteCalls = 0;
+  let timerCalls = 0;
+  const origSetTimeout = ctx.setTimeout;
+  ctx.setTimeout = (...args) => {
+    timerCalls += 1;
+    return origSetTimeout(...args);
+  };
   const sessOk = createSession('hif配卡 姬崎莉波 ガラクタロード', {
     author: { nick: '<script>alert(1)</script>' },
+    bot: {
+      async deleteMessage() {
+        deleteCalls += 1;
+      },
+    },
   });
   const okRes = await ctx.dispatch(sessOk);
+  ctx.setTimeout = origSetTimeout;
   assert.equal(okRes.nextCalled, false);
-  assert.equal(okRes.ret, undefined);
-  assert.equal(sessOk.sent.length, 1);
-  const sentPayload = sessOk.sent[0];
+  assert.equal(sessOk.sent.length, 0, '不应走自动撤回队列，应由中间件直接返图');
+  assert.equal(timerCalls, 0, '不应调度自动撤回定时器');
+  assert.equal(deleteCalls, 0, '不应触发 deleteMessage');
+  const sentPayload = okRes.ret;
   assert.equal(Array.isArray(sentPayload), false, '不得返回含文字的多元素数组');
   assert.equal(sentPayload.type, 'image');
   assert.ok(Buffer.isBuffer(sentPayload.attrs.data));
@@ -709,7 +723,7 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
   assert.equal(cdRes.ret.type, 'text');
   assert.match(cdRes.ret.attrs.content, /冷却中/);
 
-  // 3. recallSeconds=0 时直接返回单个 image 元素（不含 text）
+  // 3. recallSeconds=0 时同样直接返回单个 image 元素（不含 text）
   const ctxNoRecall = createMockCtx(db, { cooldownSeconds: 0, boxQueryRecallSeconds: 0 }, () =>
     createFakePage({ boundingBox: { x: 0, y: 0, width: 1200, height: 960 } })
   );
