@@ -31,7 +31,7 @@
     {
       id: 'picks',
       title: '抓卡类次数',
-      desc: '培育整局内各类技能卡获取次数，对应 S 卡的「抓卡触发」词条加成。',
+      desc: '仅代表对应 S 卡「抓卡」词条的独立触发次数，每个词条互不影响（如修改「抓彩卡」不会联动改变「抓 A/M 卡」）。',
       items: [
         { key: 'B23', label: '抓 A 卡', shortLabel: '抓A卡', defaultVal: 6, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B23' },
         { key: 'B24', label: '抓 M 卡', shortLabel: '抓M卡', defaultVal: 12, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B24' },
@@ -47,7 +47,7 @@
     {
       id: 'cardsOps',
       title: '强化 / 删卡 / 变卡 / 买卡 / 道具',
-      desc: '培育中的卡组调整、商店购买与挑战道具触发次数。',
+      desc: '仅代表对应 S 卡词条的独立触发次数，每个词条互不影响（如修改「删 A/M 卡」不会联动改变「删卡总数」）。',
       items: [
         { key: 'B28', label: 'A 强化', shortLabel: 'A强化', defaultVal: 2, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B28' },
         { key: 'B29', label: 'M 强化', shortLabel: 'M强化', defaultVal: 2, min: 0, max: 50, step: 1, type: 'int', actionKey: 'B29' },
@@ -62,7 +62,7 @@
     {
       id: 'scheduleDrinks',
       title: '行程与饮料',
-      desc: '营业固定 6 次不可修改；携带小饮料（ふわふわでワクワク）时会在饮料全局总数基础上额外叠加 蓝SP次数×2。',
+      desc: '仅代表对应 S 卡词条的独立触发次数，每个词条互不影响（如修改「相谈买饮料」不会自动叠加到「饮料全局总数」）；营业固定 6 次不可改；携带小饮料（ふわふわでワクワク）时会在饮料全局总数基础上额外叠加 蓝SP次数×2。',
       items: [
         { key: 'B30', label: '营业次数', shortLabel: '营业', defaultVal: 6, min: 6, max: 6, step: 1, type: 'int', locked: true },
         { key: 'B32', label: '休息次数', shortLabel: '休息', defaultVal: 0, min: 0, max: 20, step: 1, type: 'int', actionKey: 'B32' },

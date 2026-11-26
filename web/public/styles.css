@@ -1269,6 +1269,19 @@ body {
   border-radius: 9px;
   padding: 6px 10px;
 }
+.hp-rule-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 9px;
+  padding: 7px 11px;
+}
+.hp-rule-note strong {
+  color: #fef3c7;
+  font-weight: 800;
+}
 
 .card-grid.mode-hif-params {
   grid-template-columns: 1fr;
