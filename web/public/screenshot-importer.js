@@ -216,11 +216,11 @@
     return rgba[idx] > thr && rgba[idx + 1] > thr && rgba[idx + 2] > thr;
   }
 
-  function hasWhiteNearX(rgba, imgW, y, xCenterFrac, halfSpanFrac = 0.025) {
+  function hasWhiteNearX(rgba, imgW, y, xCenterFrac, halfSpanFrac = 0.025, thr = 235) {
     const xa = Math.max(0, Math.floor(imgW * (xCenterFrac - halfSpanFrac)));
     const xb = Math.min(imgW - 1, Math.floor(imgW * (xCenterFrac + halfSpanFrac)));
-    for (let x = xa; x <= xb; x += 2) {
-      if (isWhitePixel(rgba, imgW, x, y, 235)) {
+    for (let x = xa; x <= xb; x += 1) {
+      if (isWhitePixel(rgba, imgW, x, y, thr)) {
         return true;
       }
     }
@@ -228,7 +228,7 @@
   }
 
   /**
-   * 通用 3 列网格定位（兼容任意分辨率、单屏分段图与超长滚动图，自动避开顶部预览与底部悬浮栏）
+   * 通用 3 列网格定位（兼容任意分辨率、单屏分段图与超长滚动图，自动避开顶部预览、右侧滚动条与底部悬浮栏）
    */
   function detectGridInRgba(rgba, w, h) {
     if (!rgba || w < 120 || h < 80) {
@@ -242,10 +242,10 @@
 
     for (let y = 0; y < h; y += stepY) {
       if (
-        isWhitePixel(rgba, w, leftMarginX, y, 235) &&
-        isWhitePixel(rgba, w, rightMarginX, y, 235) &&
-        hasWhiteNearX(rgba, w, y, 0.346) &&
-        hasWhiteNearX(rgba, w, y, 0.654)
+        hasWhiteNearX(rgba, w, y, 0.015, 0.012, 232) &&
+        hasWhiteNearX(rgba, w, y, 0.978, 0.018, 232) &&
+        hasWhiteNearX(rgba, w, y, 0.346, 0.025, 232) &&
+        hasWhiteNearX(rgba, w, y, 0.654, 0.025, 232)
       ) {
         gridYs.push(y);
       }
@@ -256,6 +256,7 @@
     }
 
     const cols = [];
+    const colWhiteRatios = new Float32Array(w);
     let inRun = false;
     let runStart = 0;
     for (let x = 0; x < w; x += 1) {
@@ -266,6 +267,7 @@
         }
       }
       const whiteRatio = whites / gridYs.length;
+      colWhiteRatios[x] = whiteRatio;
       if (whiteRatio < 0.72 && !inRun) {
         runStart = x;
         inRun = true;
@@ -284,6 +286,20 @@
       return { cols, rows: [] };
     }
 
+    const pickCleanestGutterX = (xStart, xEnd, fallbackX) => {
+      if (xEnd < xStart) return fallbackX;
+      let bestRatio = -1;
+      for (let x = xStart; x <= xEnd; x += 1) {
+        if (colWhiteRatios[x] > bestRatio) bestRatio = colWhiteRatios[x];
+      }
+      if (bestRatio < 0.5) return fallbackX;
+      const cleanXs = [];
+      for (let x = xStart; x <= xEnd; x += 1) {
+        if (colWhiteRatios[x] >= bestRatio - 0.02) cleanXs.push(x);
+      }
+      return cleanXs.length > 0 ? cleanXs[Math.floor(cleanXs.length / 2)] : fallbackX;
+    };
+
     const cardW = (cols[0][1] - cols[0][0] + (cols[1][1] - cols[1][0]) + (cols[2][1] - cols[2][0])) / 3;
     const expectedH = cardW / 1.77;
     const sampleXs = [];
@@ -294,10 +310,10 @@
     }
 
     const gutterXs = [
-      leftMarginX,
+      pickCleanestGutterX(0, cols[0][0] - 1, leftMarginX),
       Math.floor((cols[0][1] + cols[1][0]) / 2),
       Math.floor((cols[1][1] + cols[2][0]) / 2),
-      rightMarginX,
+      pickCleanestGutterX(cols[2][1], w - 1, rightMarginX),
     ];
 
     const rows = [];

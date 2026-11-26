@@ -143,6 +143,59 @@ test('合成标准 3 列网格可在前端 JS 引擎中稳定识别网格与空�
   assert.equal(zeroRes.detections.length, 0);
 });
 
+test('detectGridInRgba 在右侧存在灰色滚动条与滑块遮挡 x=0.985 时仍可准确定位 3 列卡片网格', () => {
+  const w = 720;
+  const h = 900;
+  const rgba = new Uint8ClampedArray(w * h * 4).fill(255);
+
+  // 顶部非白预览区 y=0..220
+  for (let y = 0; y < 220; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const idx = (y * w + x) * 4;
+      rgba[idx] = 60;
+      rgba[idx + 1] = 80;
+      rgba[idx + 2] = 110;
+    }
+  }
+
+  // 绘制 4 行 × 3 列暗色卡片单元格 (cols: [31,246], [253,467], [474,689], cardH=121)
+  const colRanges = [
+    [31, 246],
+    [253, 467],
+    [474, 689],
+  ];
+  const rowStarts = [240, 368, 496, 624];
+  const cardH = 121;
+  for (const ry of rowStarts) {
+    for (const [cx1, cx2] of colRanges) {
+      for (let y = ry; y < ry + cardH; y += 1) {
+        for (let x = cx1; x < cx2; x += 1) {
+          const idx = (y * w + x) * 4;
+          rgba[idx] = 70;
+          rgba[idx + 1] = 110;
+          rgba[idx + 2] = 150;
+        }
+      }
+    }
+  }
+
+  // 在右侧 x=709..714 绘制贯穿的灰色滚动条与深灰滑块（直接压在 720*0.985=709 上）
+  for (let y = 225; y < h; y += 1) {
+    const isThumb = y >= 240 && y <= 380;
+    const v = isThumb ? 180 : 230;
+    for (let x = 709; x <= 714; x += 1) {
+      const idx = (y * w + x) * 4;
+      rgba[idx] = v;
+      rgba[idx + 1] = v;
+      rgba[idx + 2] = v;
+    }
+  }
+
+  const grid = Importer.detectGridInRgba(rgba, w, h);
+  assert.equal(grid.cols.length, 3);
+  assert.equal(grid.rows.length, 4);
+});
+
 const realShotsDir = process.env.GKMS_TEST_SHOTS_DIR;
 if (realShotsDir && fs.existsSync(realShotsDir)) {
   test('真机截图与超长拼图分带在真实 JS 识别引擎下达到高准确率', () => {
