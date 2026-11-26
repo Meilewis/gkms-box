@@ -542,14 +542,20 @@ def eval_cards_flat_and_pct(
     by_attr_pool: Dict[int, List[dict]] = {1: [], 2: [], 3: []}
     attr_to_slot = {cfg.slot_attrs[s]: s for s in range(3)}
     mini_card = None
+    trifold_card = None
+    big_drink_card = None
 
     for c in cards:
-        if c["isMiniDrink"]:
-            mini_card = c
         if c["id"] in banned_ids:
             continue
         if c["plan"] != 0 and c["plan"] != cfg.idol_plan:
             continue
+        if c["isMiniDrink"]:
+            mini_card = c
+        if c["supportKey"] == "3-0085":
+            trifold_card = c
+        if c["supportKey"] == "3-0030":
+            big_drink_card = c
         if no_pollution and c["pollution"] == 1 and c["id"] not in locked_ids:
             continue
         s_idx = attr_to_slot[c["attr"]]
@@ -575,7 +581,7 @@ def eval_cards_flat_and_pct(
             "self_pct": self_pct,
             "max_pct": max_pct,
         })
-    return rv_zero, by_attr_pool, mini_card
+    return rv_zero, by_attr_pool, mini_card, trifold_card, big_drink_card
 
 
 def pick_best_color_at_blue(
@@ -658,20 +664,24 @@ def generate_candidate_decks_for_ratio(
     by_attr_pool: Dict[int, List[dict]],
     mini_card: Optional[dict],
     trifold_card: Optional[dict],
+    big_drink_card: Optional[dict],
     min_sp_by_slot: Tuple[int, int, int],
     banned_ids: set,
     force_mini_drink: bool,
     force_trifold_drink: bool = False,
+    force_big_drink: bool = False,
     color_pick_cache: Optional[dict] = None,
 ):
     """在多个蓝字基准档位提取不重复的最优候选卡组，覆盖高百分比与高固值权衡。"""
     da_slot = cfg.slot_attrs.index(2)
-    need_blue_special = (1 if force_mini_drink else 0) + (1 if force_trifold_drink else 0)
+    need_blue_special = (1 if force_mini_drink else 0) + (1 if force_trifold_drink else 0) + (1 if force_big_drink else 0)
     if slot_counts[da_slot] < need_blue_special:
         return []
     if force_mini_drink and (not mini_card or mini_card["id"] in banned_ids or mini_card not in [x["card"] for x in by_attr_pool[2]]):
         return []
     if force_trifold_drink and (not trifold_card or trifold_card["id"] in banned_ids or trifold_card not in [x["card"] for x in by_attr_pool[2]]):
+        return []
+    if force_big_drink and (not big_drink_card or big_drink_card["id"] in banned_ids or big_drink_card not in [x["card"] for x in by_attr_pool[2]]):
         return []
 
     blue_extra_must = set()
@@ -679,6 +689,8 @@ def generate_candidate_decks_for_ratio(
         blue_extra_must.add(mini_card["id"])
     if force_trifold_drink and trifold_card:
         blue_extra_must.add(trifold_card["id"])
+    if force_big_drink and big_drink_card:
+        blue_extra_must.add(big_drink_card["id"])
 
     for s_idx, cnt in enumerate(slot_counts):
         attr = cfg.slot_attrs[s_idx]
@@ -739,7 +751,8 @@ def generate_candidate_decks_for_ratio(
                         "pct": pc,
                         "borrowed": is_b,
                         "isMiniDrink": x["card"]["isMiniDrink"],
-                        "isTrifold": x["card"]["jpName"] == "自分と向き合う時間だ",
+                        "isTrifold": x["card"]["supportKey"] == "3-0085",
+                        "isBigDrink": x["card"]["supportKey"] == "3-0030",
                         "itemNote": x["card"]["itemNote"],
                     })
                     if is_b:
@@ -758,6 +771,7 @@ def generate_candidate_decks_for_ratio(
                     "borrowed": borrowed_info or "无(自持最优)",
                     "mini_drink_active": force_mini_drink,
                     "trifold_drink_active": force_trifold_drink,
+                    "big_drink_active": force_big_drink,
                 }
     return list(seen_decks.values())
 
@@ -901,7 +915,9 @@ def print_solution(
     if deck["mini_drink_active"]:
         tags.append(f"小饮料+{sol['mini_drinks']}瓶")
     if deck.get("trifold_drink_active"):
-        tags.append("三折叠+2瓶")
+        tags.append(f"三折叠+{sol.get('trifold_drinks', 2)}瓶")
+    if deck.get("big_drink_active"):
+        tags.append(f"大饮料+{sol.get('big_drinks', 4)}瓶")
     tag = f" [{' / '.join(tags)}]" if tags else ""
 
     sp1 = sum(1 for x in sp_seq if x == 1)
@@ -990,7 +1006,7 @@ def main():
         help="自由日模式: strict(能支就支/优先商店不特指, 默认) | no-late-outing(避二选后外出) | full(全量74种)",
     )
     parser.add_argument("--allow-late-outing", action="store_true", help="兼容参数：等价于 --route-mode full")
-    parser.add_argument("--trifold-drink", action="store_true", help="可选：计入三折叠道具+2瓶饮料联动(默认关闭)")
+    parser.add_argument("--trifold-drink", action="store_true", default=True, help="兼容参数：已默认启用三折叠(+2)/大饮料(+4)动态饮料联动")
     parser.add_argument("--no-item", action="store_true", help="关闭S卡道具数值全发（默认开启）")
     parser.add_argument("--seika", action="store_true", help="开启塞卡等效+20属性（默认关闭）")
     parser.add_argument("--no-pollution", action="store_true", help="过滤特定卡(按原表H列标记)")
@@ -1042,12 +1058,11 @@ def main():
     print(f"自动推导槽位: 一属={ATTR_NAMES[slot_attrs[0]]} | 二属={ATTR_NAMES[slot_attrs[1]]} | 三属={ATTR_NAMES[slot_attrs[2]]}")
     print(
         f"参数: 本战1={args.round1}万 | 本战2={args.round2}万 | 星耀={args.star} | HIF全局=+{args.hif_global_pct}%/+{args.hif_global_flat} | 回忆%={args.mem_pct} 固值={args.mem_flat}\n"
-        f"      抓SSR={args.ssr_pick} | 20SP={args.sp20} | 相谈饮料={args.consult_drinks} | 日程={route_mode} | 三折叠+2饮料={args.trifold_drink} | 最低SP={min_sp}"
+        f"      抓SSR={args.ssr_pick} | 20SP={args.sp20} | 相谈饮料={args.consult_drinks} | 日程={route_mode} | 道具送饮料=小饮料/三折叠(+2)/大饮料(+4) | 最低SP={min_sp}"
     )
     print("=" * 78)
 
     da_slot = slot_attrs.index(2)
-    trifold_card = next((c for c in cards if c["jpName"] == "自分と向き合う時間だ"), None)
 
     if not args.scan_routes:
         sp_seq = tuple(int(x) for x in (args.sp_seq or "1,1,1,1,1,1,2,2").split(","))
@@ -1100,28 +1115,47 @@ def main():
                 else EXAM_ALLOC_CANDIDATES
             )
 
-            drink_modes = [(False, False, 0, 0), (True, False, da_sp_count * 2, da_sp_count * 2)]
-            if args.trifold_drink:
-                drink_modes.extend([
-                    (False, True, 0, 2),
-                    (True, True, da_sp_count * 2, da_sp_count * 2 + 2),
-                ])
+            mini_owned = (box_lbs is None) or (0 <= box_lbs.get("2-0007", -1) <= 4)
+            tri_owned = (box_lbs is None) or (0 <= box_lbs.get("3-0085", -1) <= 4)
+            big_owned = (box_lbs is None) or (0 <= box_lbs.get("3-0030", -1) <= 4)
+            big_per_deck = min(max(0, BASE_HIF_ACTIONS["B25"]), 4)
+            tri_flags = [False, True] if idol_plan == 1 else [False]
+            big_flags = [False, True] if idol_plan == 1 else [False]
 
-            for force_mini, force_tri, mini_drinks, ex_drinks in drink_modes:
-                rv_zero, pool, mini_c = eval_cards_flat_and_pct(
+            drink_modes = []
+            for force_mini in (False, True):
+                for force_tri in tri_flags:
+                    for force_big in big_flags:
+                        if box_lbs is not None:
+                            missing_cnt = (
+                                (1 if (force_mini and not mini_owned) else 0)
+                                + (1 if (force_tri and not tri_owned) else 0)
+                                + (1 if (force_big and not big_owned) else 0)
+                            )
+                            if missing_cnt > 1:
+                                continue
+                        m_d = da_sp_count * 2 if force_mini else 0
+                        t_d = 2 if force_tri else 0
+                        b_d = big_per_deck if force_big else 0
+                        drink_modes.append((force_mini, force_tri, force_big, m_d, t_d, b_d, m_d + t_d + b_d))
+
+            for force_mini, force_tri, force_big, mini_drinks, tri_drinks, big_drinks, ex_drinks in drink_modes:
+                rv_zero, pool, mini_c, tri_c, big_c = eval_cards_flat_and_pct(
                     cards, compiled, pct_table, cfg, box_lbs, args.no_pollution, locked_ids, banned_ids, extra_drinks=ex_drinks
                 )
                 color_pick_cache = {}
                 for rname, sc in DECK_RATIOS:
                     cand_decks = generate_candidate_decks_for_ratio(
-                        cfg, rname, sc, pool, mini_c, trifold_card, min_sp, banned_ids,
-                        force_mini, force_tri, color_pick_cache
+                        cfg, rname, sc, pool, mini_c, tri_c, big_c, min_sp, banned_ids,
+                        force_mini, force_tri, force_big, color_pick_cache
                     )
                     for deck in cand_decks:
                         # 未开启对应联动时如自然选中对应卡则由带联动分支覆盖
                         if not force_mini and any(c["isMiniDrink"] for c in deck["cards"]):
                             continue
-                        if args.trifold_drink and not force_tri and any(c["isTrifold"] for c in deck["cards"]):
+                        if not force_tri and any(c["isTrifold"] for c in deck["cards"]):
+                            continue
+                        if not force_big and any(c["isBigDrink"] for c in deck["cards"]):
                             continue
                         prune_floor = best_eff_by_ratio.get(rname, -1)
                         for sp_info in sp_variants:
@@ -1160,6 +1194,8 @@ def main():
                                     "sp_seq": sp_info["seq"],
                                     "exam_targets": ex_info["targets"],
                                     "mini_drinks": mini_drinks,
+                                    "trifold_drinks": tri_drinks,
+                                    "big_drinks": big_drinks,
                                     "extra_drinks": ex_drinks,
                                     "rv_zero": rv_zero,
                                 }

@@ -1317,6 +1317,7 @@ body {
   padding: 10px 11px;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   gap: 8px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1331,12 +1332,13 @@ body {
 .hp-item-top {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
 }
 .hp-item-label {
   font-size: 12px;
   font-weight: 800;
+  line-height: 1.35;
   color: #e2e8f0;
 }
 .hp-item-def,
@@ -1344,6 +1346,8 @@ body {
   font-size: 10px;
   font-weight: 700;
   color: #94a3b8;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .hp-item.is-modified .hp-item-def {
   color: #fcd34d;

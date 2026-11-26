@@ -88,6 +88,9 @@
     [200, 240, 10],
   ];
 
+  const TRIFOLD_SUPPORT_KEY = '3-0085'; // 自分と向き合う時間だ（三折叠：营业/上课结束 Da>=700 得 1 瓶，上限 2 次）
+  const BIG_DRINK_SUPPORT_KEY = '3-0030'; // あっちも行きたいですわ！（大饮料：抓好调卡时 Da>=200 得 1 瓶，上限 4 次）
+
   const BASE_HIF_ACTIONS = {
     B23: 6,
     B24: 12,
@@ -672,15 +675,26 @@
     return r;
   }
 
+  function isCardOwned(boxLbs, supportKey) {
+    if (boxLbs == null) return true;
+    if (!Object.prototype.hasOwnProperty.call(boxLbs, supportKey)) return false;
+    const val = Number(boxLbs[supportKey]);
+    return Number.isInteger(val) && val >= 0 && val <= 4;
+  }
+
   function evalCardsFlatAndPct(engine, slotAttrs, idolPlan, rvZero, boxLbs, calcItem = true, calcSeika = false) {
     const { cards, compiled, pctTable } = engine;
     const attrToSlot = { [slotAttrs[0]]: 0, [slotAttrs[1]]: 1, [slotAttrs[2]]: 2 };
     const byAttrPool = { 1: [], 2: [], 3: [] };
     let miniCard = null;
+    let trifoldCard = null;
+    let bigDrinkCard = null;
 
     for (const c of cards) {
-      if (c.isMiniDrink) miniCard = c;
       if (c.plan !== 0 && c.plan !== idolPlan) continue;
+      if (c.isMiniDrink) miniCard = c;
+      if (c.supportKey === TRIFOLD_SUPPORT_KEY) trifoldCard = c;
+      if (c.supportKey === BIG_DRINK_SUPPORT_KEY) bigDrinkCard = c;
       const sIdx = attrToSlot[c.attr];
       // 显式要求未持有为 -1，绝不缺省当成 4 破
       let lb = -1;
@@ -713,7 +727,7 @@
         maxPct,
       });
     }
-    return { byAttrPool, miniCard };
+    return { byAttrPool, miniCard, trifoldCard, bigDrinkCard };
   }
 
   function pickBestColorAtBlue({ pool, need, minSp, allowBorrow, extraMustIds, blueApprox }) {
@@ -801,16 +815,28 @@
     slotCounts,
     byAttrPool,
     miniCard,
+    trifoldCard,
+    bigDrinkCard,
     forceMiniDrink,
+    forceTrifoldDrink,
+    forceBigDrink,
     colorPickCache,
   }) {
     const daSlot = slotAttrs.indexOf(2);
-    if (forceMiniDrink) {
-      if (slotCounts[daSlot] < 1) return [];
-      if (!miniCard || !byAttrPool[2].some((x) => x.card.id === miniCard.id)) return [];
-    }
     const blueExtraMust = new Set();
-    if (forceMiniDrink && miniCard) blueExtraMust.add(miniCard.id);
+    if (forceMiniDrink) {
+      if (!miniCard || !byAttrPool[2].some((x) => x.card.id === miniCard.id)) return [];
+      blueExtraMust.add(miniCard.id);
+    }
+    if (forceTrifoldDrink) {
+      if (!trifoldCard || !byAttrPool[2].some((x) => x.card.id === trifoldCard.id)) return [];
+      blueExtraMust.add(trifoldCard.id);
+    }
+    if (forceBigDrink) {
+      if (!bigDrinkCard || !byAttrPool[2].some((x) => x.card.id === bigDrinkCard.id)) return [];
+      blueExtraMust.add(bigDrinkCard.id);
+    }
+    if (slotCounts[daSlot] < blueExtraMust.size) return [];
 
     const borrowAttrChoices = [null];
     for (let s = 0; s < 3; s += 1) {
@@ -831,7 +857,7 @@
           const cnt = slotCounts[sIdx];
           const attr = slotAttrs[sIdx];
           const exMust = attr === 2 ? blueExtraMust : new Set();
-          const exKey = exMust.size ? miniCard.id : '';
+          const exKey = exMust.size ? Array.from(exMust).sort((a, b) => a - b).join(',') : '';
           const ckey = `${sIdx}:${cnt}:${bAttr === attr ? 1 : 0}:${exKey}:${blues[sIdx]}`;
 
           let picks;
@@ -872,6 +898,8 @@
               pct: pick.pct,
               borrowed: pick.isBorrowed,
               isMiniDrink: Boolean(c.isMiniDrink),
+              isTrifoldDrink: c.supportKey === TRIFOLD_SUPPORT_KEY,
+              isBigDrink: c.supportKey === BIG_DRINK_SUPPORT_KEY,
               itemNote: c.itemNote || '',
             });
             if (pick.isBorrowed) {
@@ -895,6 +923,8 @@
             supFlat,
             borrowed: borrowedInfo || '无(自持最优)',
             miniDrinkActive: forceMiniDrink,
+            trifoldDrinkActive: forceTrifoldDrink,
+            bigDrinkActive: forceBigDrink,
           });
         }
       }
@@ -1035,6 +1065,19 @@
     let bestRec = null;
     let bestGlobalEff = -1;
 
+    const effB25 =
+      actionOverrides && Object.prototype.hasOwnProperty.call(actionOverrides, 'B25')
+        ? actionOverrides.B25
+        : BASE_HIF_ACTIONS.B25;
+    const bigDrinkPerDeck = Math.min(Math.max(0, Number(effB25) || 0), 4);
+    const hasSenseItemDrinks = idolPlan === 1;
+    const miniOwned = isCardOwned(boxLbs, '2-0007');
+    const trifoldOwned = isCardOwned(boxLbs, TRIFOLD_SUPPORT_KEY);
+    const bigOwned = isCardOwned(boxLbs, BIG_DRINK_SUPPORT_KEY);
+    const miniFlags = [false, true];
+    const triFlags = hasSenseItemDrinks ? [false, true] : [false];
+    const bigFlags = hasSenseItemDrinks ? [false, true] : [false];
+
     for (const act of STRICT_ACTION_COUNTS) {
       const actLabel = `${act.consult}相谈/${act.supply}支给/${act.outing}外出/${act.special}特指`;
       for (let sp1Count = 8; sp1Count >= 0; sp1Count -= 1) {
@@ -1043,14 +1086,42 @@
         let daSpCount = 0;
         for (const x of repSeq) if (x === daSlot + 1) daSpCount += 1;
 
-        const drinkModes = [
-          [false, 0],
-          [true, daSpCount * 2],
-        ];
+        const drinkModes = [];
+        for (const forceMini of miniFlags) {
+          for (const forceTri of triFlags) {
+            for (const forceBig of bigFlags) {
+              if (boxLbs != null) {
+                const missingCount =
+                  (forceMini && !miniOwned ? 1 : 0) +
+                  (forceTri && !trifoldOwned ? 1 : 0) +
+                  (forceBig && !bigOwned ? 1 : 0);
+                if (missingCount > 1) continue;
+              }
+              const miniDrinks = forceMini ? daSpCount * 2 : 0;
+              const trifoldDrinks = forceTri ? 2 : 0;
+              const bigDrinks = forceBig ? bigDrinkPerDeck : 0;
+              drinkModes.push({
+                forceMini,
+                forceTri,
+                forceBig,
+                miniDrinks,
+                trifoldDrinks,
+                bigDrinks,
+                extraDrinks: miniDrinks + trifoldDrinks + bigDrinks,
+              });
+            }
+          }
+        }
 
-        for (const [forceMini, extraDrinks] of drinkModes) {
-          const rvZero = buildBaseRouteVars({ act, spSeq: repSeq, extraDrinks, baseDrinks, actionOverrides });
-          const { byAttrPool, miniCard } = evalCardsFlatAndPct(
+        for (const dm of drinkModes) {
+          const rvZero = buildBaseRouteVars({
+            act,
+            spSeq: repSeq,
+            extraDrinks: dm.extraDrinks,
+            baseDrinks,
+            actionOverrides,
+          });
+          const { byAttrPool, miniCard, trifoldCard, bigDrinkCard } = evalCardsFlatAndPct(
             engine,
             slotAttrs,
             idolPlan,
@@ -1068,12 +1139,18 @@
               slotCounts,
               byAttrPool,
               miniCard,
-              forceMiniDrink: forceMini,
+              trifoldCard,
+              bigDrinkCard,
+              forceMiniDrink: dm.forceMini,
+              forceTrifoldDrink: dm.forceTri,
+              forceBigDrink: dm.forceBig,
               colorPickCache,
             });
 
             for (const deck of candDecks) {
-              if (!forceMini && deck.cards.some((c) => c.isMiniDrink)) continue;
+              if (!dm.forceMini && deck.cards.some((c) => c.isMiniDrink)) continue;
+              if (!dm.forceTri && deck.cards.some((c) => c.isTrifoldDrink)) continue;
+              if (!dm.forceBig && deck.cards.some((c) => c.isBigDrink)) continue;
 
               const tp0 = roundN(realStats[`${slotKey0}Rate`] + hifGlobalPct + memPct[0] + deck.supPct[0], 4);
               const tp1 = roundN(realStats[`${slotKey1}Rate`] + hifGlobalPct + memPct[1] + deck.supPct[1], 4);
@@ -1139,7 +1216,12 @@
                       cards: deck.cards,
                       borrowed: deck.borrowed,
                       miniDrinkActive: deck.miniDrinkActive,
-                      miniDrinks: extraDrinks,
+                      miniDrinks: dm.miniDrinks,
+                      trifoldDrinkActive: deck.trifoldDrinkActive,
+                      trifoldDrinks: dm.trifoldDrinks,
+                      bigDrinkActive: deck.bigDrinkActive,
+                      bigDrinks: dm.bigDrinks,
+                      itemDrinksTotal: dm.extraDrinks,
                       actLabel,
                       actCounts: act,
                       spSeq: spVariants[vi].seq,

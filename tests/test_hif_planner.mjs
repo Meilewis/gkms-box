@@ -78,26 +78,32 @@ test('HIF 引擎编译与 2895/2895 线性百分比校验通过', () => {
 test('HIF 求解引擎三组黄金基准与 Python v2 100% 一致且耗时 < 2.5s', () => {
   const engine = HifPlanner.loadHifEngine(PLUGIN_DIR);
 
-  // 1. 全 4 破 姬崎莉波 hrnm-3-017
+  // 1. 全 4 破 姬崎莉波 hrnm-3-017（含小饮料+16与三折叠+2）
   const t1 = Date.now();
   const r1 = HifPlanner.solveBestHifDeck(cidolByKey['hrnm-3-017'], null, engine, supportByKey);
   const dt1 = Date.now() - t1;
   assert.equal(r1.ok, true);
-  assert.equal(r1.result.rating.finalRating, 35210);
-  assert.equal(r1.result.effectiveTotal, 7149);
-  assert.equal(r1.result.overflowLoss, 41);
+  assert.equal(r1.result.rating.finalRating, 35230);
+  assert.equal(r1.result.effectiveTotal, 7159);
+  assert.equal(r1.result.overflowLoss, 61);
   assert.equal(r1.result.ratio, '2 / 4');
+  assert.equal(r1.result.trifoldDrinkActive, true);
+  assert.equal(r1.result.trifoldDrinks, 2);
+  assert.equal(r1.result.itemDrinksTotal, 18);
   assert.ok(dt1 < 2500, `全4破莉波求解耗时过久: ${dt1}ms`);
 
-  // 2. 全 4 破 藤田琴音 fktn-3-013
+  // 2. 全 4 破 藤田琴音 fktn-3-013（含小饮料+16与三折叠+2）
   const t2 = Date.now();
   const r2 = HifPlanner.solveBestHifDeck(cidolByKey['fktn-3-013'], null, engine, supportByKey);
   const dt2 = Date.now() - t2;
   assert.equal(r2.ok, true);
-  assert.equal(r2.result.rating.finalRating, 35178);
-  assert.equal(r2.result.effectiveTotal, 7133);
-  assert.equal(r2.result.overflowLoss, 56);
+  assert.equal(r2.result.rating.finalRating, 35198);
+  assert.equal(r2.result.effectiveTotal, 7143);
+  assert.equal(r2.result.overflowLoss, 76);
   assert.equal(r2.result.ratio, '4 / 2');
+  assert.equal(r2.result.trifoldDrinkActive, true);
+  assert.equal(r2.result.trifoldDrinks, 2);
+  assert.equal(r2.result.itemDrinksTotal, 18);
   assert.ok(dt2 < 2500, `全4破琴音求解耗时过久: ${dt2}ms`);
 
   // 3. 真实用户 BOX (g41505436) + 姬崎莉波 hrnm-3-017
@@ -115,6 +121,10 @@ test('HIF 求解引擎三组黄金基准与 Python v2 100% 一致且耗时 < 2.5
   assert.equal(res3.effectiveTotal, 6999);
   assert.equal(res3.overflowLoss, 0);
   assert.equal(res3.ratio, '2 / 4');
+  assert.equal(res3.trifoldDrinkActive, false);
+  assert.equal(res3.trifoldDrinks, 0);
+  assert.equal(res3.bigDrinkActive, false);
+  assert.equal(res3.bigDrinks, 0);
   assert.equal(res3.cards.length, 6);
   // 8 天 SP 全蓝(二属 idx=2)，选拔蓝/黄/黄(slot 1,0,0)，营业累计黄+300/红+600
   assert.deepEqual(res3.spSeq, [2, 2, 2, 2, 2, 2, 2, 2]);
@@ -150,14 +160,39 @@ test('HIF 引擎安全性校验：缺键默认未持有、禁止未持有小饮�
       assert.ok(Object.prototype.hasOwnProperty.call(sparseBox, card.supportKey), `未持有卡被误算入队: ${card.supportKey}`);
     }
   }
-  // 借卡位如果给了本番前昼，小饮料绝不应该出现在队伍中或激活额外饮料
+  // 借卡位如果给了本番前昼，小饮料绝不应该出现在队伍中或激活额外饮料；且未持有三折叠/大饮料亦不得白嫖
   const hasMini = r.result.cards.some((c) => c.supportKey === '2-0007');
   if (!hasMini) {
     assert.equal(r.result.miniDrinkActive, false);
     assert.equal(r.result.miniDrinks, 0);
   }
+  assert.equal(r.result.trifoldDrinkActive, false);
+  assert.equal(r.result.trifoldDrinks, 0);
+  assert.equal(r.result.bigDrinkActive, false);
+  assert.equal(r.result.bigDrinks, 0);
 
-  // 2. 卡数不足 5 张无法凑齐 6 卡（5+1借）时返回优雅错误
+  // 2. 持有大饮料 (3-0030) 时触发 +min(B25, 4) 饮料联动，且 B25=2 时精确衰减为 +2 瓶
+  const bigDrinkBox = {
+    '3-0030': 4, // 大饮料 (Da 感性)
+    '3-0064': 4, // 黄绝好调
+    '3-0069': 4, // 马自立
+    '3-0070': 4, // oi!
+    '3-0099': 4, // 本番前昼
+  };
+  const rBigDefault = HifPlanner.solveBestHifDeck(cidolByKey['hrnm-3-017'], bigDrinkBox, engine, supportByKey);
+  assert.equal(rBigDefault.ok, true);
+  assert.equal(rBigDefault.result.bigDrinkActive, true);
+  assert.equal(rBigDefault.result.bigDrinks, 4);
+  assert.equal(rBigDefault.result.itemDrinksTotal, 20);
+
+  const rBigCap2 = HifPlanner.solveBestHifDeck(cidolByKey['hrnm-3-017'], bigDrinkBox, engine, supportByKey, {
+    actionOverrides: { B25: 2 },
+  });
+  assert.equal(rBigCap2.ok, true);
+  assert.equal(rBigCap2.result.bigDrinkActive, true);
+  assert.equal(rBigCap2.result.bigDrinks, 2);
+
+  // 3. 卡数不足 5 张无法凑齐 6 卡（5+1借）时返回优雅错误
   const tinyBox = { '3-0064': 4, '3-0069': 4 };
   const rTiny = HifPlanner.solveBestHifDeck(cidolByKey['hrnm-3-017'], tinyBox, engine, supportByKey);
   assert.equal(rTiny.ok, false);
@@ -339,4 +374,24 @@ test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求�
   assert.equal(customSolved.ok, true);
   assert.ok(customSolved.result.rating.finalRating > baseline.result.rating.finalRating);
   assert.ok(customSolved.result.customSummary.includes('一属回忆%=20%'));
+
+  // 6. 自定义参数下三折叠(+2瓶)自动助力 2/4 7蓝1黄 0溢出登顶 (35794)
+  const triDec = HifParamsCodec.decodeHifParams(
+    'hp1_QjM1PTQsQjM3PTIsQjM4PTQsQjM5PTIwLEI0MD0zMSxCNDQ9MTMsQjUwPTIsbWYzPTEwMCxtcDE9MTgsbXAyPTE3'
+  );
+  assert.equal(triDec.ok, true);
+  const rTri = HifPlanner.solveBestHifDeck(
+    cidolByKey['hrnm-3-017'],
+    null,
+    engine,
+    supportByKey,
+    triDec.solveOptions
+  );
+  assert.equal(rTri.ok, true);
+  assert.equal(rTri.result.rating.finalRating, 35794);
+  assert.equal(rTri.result.effectiveTotal, 7441);
+  assert.equal(rTri.result.overflowLoss, 0);
+  assert.equal(rTri.result.ratio, '2 / 4');
+  assert.equal(rTri.result.trifoldDrinkActive, true);
+  assert.equal(rTri.result.trifoldDrinks, 2);
 });

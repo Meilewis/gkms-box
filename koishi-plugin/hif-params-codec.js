@@ -62,12 +62,12 @@
     {
       id: 'scheduleDrinks',
       title: '行程与饮料',
-      desc: '仅代表对应 S 卡词条的独立触发次数，每个词条互不影响（如修改「相谈买饮料」不会自动叠加到「饮料全局总数」）；营业固定 6 次不可改；携带小饮料（ふわふわでワクワク）时会在饮料全局总数基础上额外叠加 蓝SP次数×2。',
+      desc: '仅代表对应 S 卡词条的独立触发次数，每个词条互不影响（如修改「相谈买饮料」不会自动叠加到「除开S卡道具获得的所有饮料数量」）；营业固定 6 次不可改；携带小饮料（+蓝SP×2瓶）/ 三折叠（+2瓶）/ 大饮料（+4瓶，受抓好调上限）时会自动额外叠加。',
       items: [
         { key: 'B30', label: '营业次数', shortLabel: '营业', defaultVal: 6, min: 6, max: 6, step: 1, type: 'int', locked: true },
         { key: 'B32', label: '休息次数', shortLabel: '休息', defaultVal: 0, min: 0, max: 20, step: 1, type: 'int', actionKey: 'B32' },
         { key: 'B39', label: '相谈买饮料', shortLabel: '相谈买饮料', defaultVal: 0, min: 0, max: 30, step: 1, type: 'int', actionKey: 'B39' },
-        { key: 'B40', label: '饮料全局总数', shortLabel: '基础饮料', defaultVal: 20, min: 0, max: 60, step: 1, type: 'int', isBaseDrinks: true },
+        { key: 'B40', label: '除开S卡道具获得的所有饮料数量', shortLabel: '非S卡道具饮料', defaultVal: 20, min: 0, max: 60, step: 1, type: 'int', isBaseDrinks: true },
       ],
     },
   ];

@@ -667,9 +667,18 @@ function buildHifDeckHtml({ ownerLabel, idol, characters, result, dataDir }) {
   const attrShort = { 1: '红', 2: '蓝', 3: '黄' };
   const examSummary = `一测→${attrShort[result.slotAttrs[result.examTargets[0]]]} · 二测→${attrShort[result.slotAttrs[result.examTargets[1]]]} · 三测→${attrShort[result.slotAttrs[result.examTargets[2]]]}`;
   const bizSummary = summarizeBizPlan(result.bizChoices, result.slotAttrs);
+  const drinkTags = [];
+  if (result.miniDrinkActive && result.miniDrinks > 0) drinkTags.push(`小饮料+${result.miniDrinks}`);
+  if (result.trifoldDrinkActive && result.trifoldDrinks > 0) drinkTags.push(`三折叠+${result.trifoldDrinks}`);
+  if (result.bigDrinkActive && result.bigDrinks > 0) drinkTags.push(`大饮料+${result.bigDrinks}`);
+  const drinkSuffix =
+    drinkTags.length === 1
+      ? ` · ${drinkTags[0]}瓶`
+      : drinkTags.length > 1
+        ? ` · ${drinkTags.join(' / ')}瓶`
+        : '';
   const freeSummary =
-    `${result.actCounts.consult}相谈 / ${result.actCounts.supply}支给 / ${result.actCounts.outing}外出` +
-    (result.miniDrinkActive && result.miniDrinks > 0 ? ` · 小饮料+${result.miniDrinks}瓶` : '');
+    `${result.actCounts.consult}相谈 / ${result.actCounts.supply}支给 / ${result.actCounts.outing}外出${drinkSuffix}`;
   const ratioShort = formatShortRatio(result.slotAttrs, result.slotCounts);
   const rawCustomSummary = String(result.customSummary || '').trim();
   const customChars = Array.from(rawCustomSummary);
