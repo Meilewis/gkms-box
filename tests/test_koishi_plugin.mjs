@@ -248,6 +248,7 @@ function createMockCtx(db, configOverrides = {}, pageFactory = () => createFakeP
     requireAt: true,
     allowDirectWithoutAt: true,
     cooldownSeconds: 20,
+    slangCooldownSeconds: 120,
     bindSuccessRecallSeconds: 30,
     boxQueryRecallSeconds: 30,
     botDisplayName: 'Hiro',
@@ -836,4 +837,111 @@ test('hif配卡: 未绑定提示、绑定后严格只返回单张 6 配卡拼图
     createSession(`hif配卡 ${customCode} 姬崎莉波 ガラクタロード`, { userId: 'u100' })
   );
   assert.equal(prefixRes.ret.type, 'image');
+});
+
+// ---------------------------------------------------------------------------
+// 黑话 / 黑话表 指令（纯长图返图、群共享 2 分钟冷却、跨群独立与管理员跳过）
+// ---------------------------------------------------------------------------
+test('黑话 / 黑话表: 静态长图返回、群共享 2 分钟冷却、跨群独立与管理员跳过', async () => {
+  assert.equal(Plugin.parseSlangCommand('黑话'), true);
+  assert.equal(Plugin.parseSlangCommand(' 黑话表 '), true);
+  assert.equal(Plugin.parseSlangCommand('黑话是什么'), false);
+  assert.equal(Plugin.parseSlangCommand('查黑话表'), false);
+
+  const db = createMockDb();
+  let puppeteerCalls = 0;
+  const ctx = createMockCtx(db, { slangCooldownSeconds: 120, boxQueryRecallSeconds: 30 }, () => {
+    puppeteerCalls += 1;
+    return createFakePage();
+  });
+
+  // 1. 帮助文案应包含黑话指令说明
+  const helpRes = await ctx.dispatch(createSession('box帮助'));
+  assert.match(helpRes.ret.attrs.content, /黑话 \/ 黑话表/);
+
+  // 2. 闲聊与群聊未 @bot 应放行 next()
+  assert.equal((await ctx.dispatch(createSession('这个黑话是什么意思'))).nextCalled, true);
+  assert.equal(
+    (
+      await ctx.dispatch(
+        createSession('黑话', {
+          guildId: 'g1',
+          content: '黑话',
+          elements: [{ type: 'text', attrs: { content: '黑话' }, children: [] }],
+          stripped: { appel: false, content: '黑话' },
+        })
+      )
+    ).nextCalled,
+    true
+  );
+
+  // 3. 群 A 成员 u1 @bot 黑话 -> 返回单张 JPEG 图片，不走 Puppeteer、不调度撤回
+  let deleteCalls = 0;
+  const sessG1U1 = createSession('黑话', {
+    guildId: 'g1',
+    channelId: 'ch1',
+    userId: 'u1',
+    bot: {
+      async deleteMessage() {
+        deleteCalls += 1;
+      },
+    },
+  });
+  const res1 = await ctx.dispatch(sessG1U1);
+  assert.equal(res1.nextCalled, false);
+  assert.equal(Array.isArray(res1.ret), false);
+  assert.equal(res1.ret.type, 'image');
+  assert.equal(res1.ret.attrs.mime, 'image/jpeg');
+  assert.ok(Buffer.isBuffer(res1.ret.attrs.data) && res1.ret.attrs.data.length > 10000);
+  assert.equal(puppeteerCalls, 0);
+  assert.equal(sessG1U1.sent.length, 0);
+  assert.equal(deleteCalls, 0);
+
+  // 4. 群 A 另一成员 u2 发送 黑话表 -> 命中群共享 120s 冷却
+  const res2 = await ctx.dispatch(
+    createSession('黑话表', {
+      guildId: 'g1',
+      channelId: 'ch1',
+      userId: 'u2',
+    })
+  );
+  assert.equal(res2.nextCalled, false);
+  assert.equal(res2.ret.type, 'text');
+  assert.match(res2.ret.attrs.content, /黑话表正在冷却中，请 \d+ 秒后再试/);
+
+  // 5. 群 B 成员 u3 发送 黑话表 -> 独立冷却，正常出图
+  const resOtherGuild = await ctx.dispatch(
+    createSession('黑话表', {
+      guildId: 'g2',
+      channelId: 'ch2',
+      userId: 'u3',
+    })
+  );
+  assert.equal(resOtherGuild.ret.type, 'image');
+  assert.ok(Buffer.isBuffer(resOtherGuild.ret.attrs.data));
+
+  // 6. 群 A 管理员 (_adminBypass: true) 冷却期内跳过冷却出图
+  const resBypass = await ctx.dispatch(
+    createSession('黑话', {
+      guildId: 'g1',
+      channelId: 'ch1',
+      userId: 'admin1',
+      _adminBypass: true,
+    })
+  );
+  assert.equal(resBypass.ret.type, 'image');
+
+  // 7. 私聊不 @bot 也能触发，且独立冷却
+  const resDirect = await ctx.dispatch(
+    createSession('黑话表', {
+      isDirect: true,
+      guildId: undefined,
+      channelId: 'dm-u9',
+      userId: 'u9',
+      content: '黑话表',
+      elements: [{ type: 'text', attrs: { content: '黑话表' }, children: [] }],
+      stripped: { appel: false, content: '黑话表' },
+    })
+  );
+  assert.equal(resDirect.ret.type, 'image');
 });

@@ -6,3 +6,4 @@ Thumbs.db
 koishi-plugin/assets/
 koishi-plugin/data/bindings.db
 *.tmp
+output/

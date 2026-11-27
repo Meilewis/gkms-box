@@ -52,6 +52,9 @@ const Config = Schema.object({
   cooldownSeconds: Schema.natural()
     .default(20)
     .description('每人连续查box/晒box拼图冷却秒数（防刷图拖慢响应）'),
+  slangCooldownSeconds: Schema.natural()
+    .default(120)
+    .description('黑话表长图冷却秒数（群聊按群共享，私聊按人独立，默认 120 秒）'),
   bindSuccessRecallSeconds: Schema.natural()
     .max(120)
     .default(30)
@@ -260,6 +263,35 @@ function parseHifDeckCommand(plainText) {
   return { rawArg: String(m[1] || '').trim() };
 }
 
+function parseSlangCommand(plainText) {
+  return /^(?:黑话|黑话表)$/i.test(String(plainText || '').trim());
+}
+
+function resolveSlangCooldownKey(session) {
+  const platform = (session && session.platform) || 'unknown';
+  if (session && session.guildId) {
+    return `${platform}:guild:${session.guildId}`;
+  }
+  if (session && session.channelId && !session.isDirect) {
+    return `${platform}:channel:${session.channelId}`;
+  }
+  const uid = (session && (session.userId || session.channelId)) || 'anonymous';
+  return `${platform}:user:${uid}`;
+}
+
+function loadSlangSheetBuffer(dataDir) {
+  const candidates = [
+    path.join(__dirname, 'data', 's_card_slang_sheet.jpg'),
+    path.join(dataDir, 'data', 's_card_slang_sheet.jpg'),
+  ];
+  for (const filePath of candidates) {
+    if (fs.existsSync(filePath)) {
+      return { filePath, buffer: fs.readFileSync(filePath) };
+    }
+  }
+  return null;
+}
+
 function buildFullSupportBoxLbs(supportCatalog, supportMap) {
   const boxLbs = {};
   for (const c of supportCatalog || []) {
@@ -300,6 +332,7 @@ function buildHelpMessage(config, catalog) {
     `4. @${bot} 查box 支援卡 / P卡 / 筱泽广 — 按分类或偶像查看自己的 BOX（仅支持查自己）`,
     `5. @${bot} 解绑box — 清除已绑定的数据`,
     `6. @${bot} hif配卡 <P卡名/角色+流派> [hp1_参数码] — 根据已绑定的 BOX 生成最优 6 配卡拼图`,
+    `7. @${bot} 黑话 / 黑话表 — 获取 S 卡社区黑话对照长图（群共享 2 分钟冷却）`,
     '',
     `当前收录：支援卡 ${catalog.support.length} 张 · P卡与皮肤 ${catalog.cidol.length} 项`,
   ];
@@ -500,6 +533,18 @@ function apply(ctx, config) {
     logger.warn('加载 HIF 配卡算分引擎失败（hif配卡功能暂不可用）：%s', err.message);
   }
 
+  let slangSheet = null;
+  try {
+    slangSheet = loadSlangSheetBuffer(dataDir);
+    if (slangSheet) {
+      logger.info('已加载 S 卡黑话对照表：%s (%d bytes)', slangSheet.filePath, slangSheet.buffer.length);
+    } else {
+      logger.warn('未找到 S 卡黑话对照表 s_card_slang_sheet.jpg（黑话表指令暂不可用）');
+    }
+  } catch (err) {
+    logger.warn('加载 S 卡黑话对照表失败：%s', err.message);
+  }
+
   ctx.model.extend(
     'gkms_box_binding',
     {
@@ -515,13 +560,19 @@ function apply(ctx, config) {
   );
 
   const renderCooldowns = new Map();
+  const slangCooldowns = new Map();
 
   if (typeof ctx.setInterval === 'function') {
     ctx.setInterval(() => {
       const cdMs = (config.cooldownSeconds || 0) * 1000;
+      const slangCdSec = config.slangCooldownSeconds === undefined ? 120 : Number(config.slangCooldownSeconds) || 0;
+      const slangCdMs = slangCdSec * 1000;
       const now = Date.now();
       for (const [key, ts] of renderCooldowns) {
         if (now - ts >= cdMs) renderCooldowns.delete(key);
+      }
+      for (const [key, ts] of slangCooldowns) {
+        if (now - ts >= slangCdMs) slangCooldowns.delete(key);
       }
     }, COOLDOWN_SWEEP_INTERVAL_MS);
   }
@@ -535,8 +586,10 @@ function apply(ctx, config) {
     const queryMatch = /^(?:查|晒)\s*box(?:\s+([\s\S]*))?$/i.exec(plainText);
     const unbindMatch = /^解绑\s*box$/i.test(plainText);
     const hifCmd = isHelp || bindCmd || queryMatch || unbindMatch ? null : parseHifDeckCommand(plainText);
+    const isSlang =
+      isHelp || bindCmd || queryMatch || unbindMatch || hifCmd ? false : parseSlangCommand(plainText);
 
-    if (!isHelp && !bindCmd && !queryMatch && !unbindMatch && !hifCmd) {
+    if (!isHelp && !bindCmd && !queryMatch && !unbindMatch && !hifCmd && !isSlang) {
       return next();
     }
 
@@ -548,6 +601,36 @@ function apply(ctx, config) {
 
     if (isHelp) {
       return textReply(buildHelpMessage(config, catalog));
+    }
+
+    if (isSlang) {
+      if (!slangSheet) {
+        try {
+          slangSheet = loadSlangSheetBuffer(dataDir);
+        } catch (_) {
+          slangSheet = null;
+        }
+      }
+      if (!slangSheet || !slangSheet.buffer) {
+        return textReply('S 卡黑话对照表尚未准备就绪，请联系管理员检查 s_card_slang_sheet.jpg 文件。');
+      }
+
+      const isBypass = Boolean(session && session._adminBypass);
+      const slangCdSec =
+        config.slangCooldownSeconds === undefined ? 120 : Number(config.slangCooldownSeconds) || 0;
+      const slangCdMs = slangCdSec * 1000;
+      const slangKey = resolveSlangCooldownKey(session);
+      if (!isBypass && slangCdMs > 0) {
+        const lastTs = slangCooldowns.get(slangKey) || 0;
+        const diff = Date.now() - lastTs;
+        if (diff < slangCdMs) {
+          const remain = Math.ceil((slangCdMs - diff) / 1000);
+          return textReply(`黑话表正在冷却中，请 ${remain} 秒后再试。`);
+        }
+        slangCooldowns.set(slangKey, Date.now());
+      }
+
+      return h.image(slangSheet.buffer, 'image/jpeg', { title: 'gkms_s_card_slang_sheet.jpg' });
     }
 
     if (!session.userId) {
@@ -979,6 +1062,8 @@ module.exports = {
   parseQueryArgs,
   parseBindCommand,
   parseHifDeckCommand,
+  parseSlangCommand,
+  resolveSlangCooldownKey,
   formatSummaryText,
   fetchShortBindRecord,
   sendAndAutoRecall,
