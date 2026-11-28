@@ -82,6 +82,7 @@
 
     const map = {};
     const items = [];
+    const indexByKey = {};
     for (const token of tokens) {
       const m = SUPPORT_ITEM_RE.exec(token);
       if (!m) {
@@ -95,7 +96,10 @@
         return { ok: false, error: `目录中不存在支援卡: ${key}` };
       }
       if (!hasOwn(map, key)) {
+        indexByKey[key] = items.length;
         items.push({ key, rarity, number, breakLevel });
+      } else {
+        items[indexByKey[key]].breakLevel = breakLevel;
       }
       map[key] = breakLevel;
     }

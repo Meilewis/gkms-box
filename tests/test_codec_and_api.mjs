@@ -75,6 +75,17 @@ test('支援卡与P卡编码解码、去重排序及非法值拦截', () => {
 
   const badCidol = WebCodec.decodeCidolBox(Buffer.from('xxxx-3-999').toString('base64'), cidolByKey);
   assert.equal(badCidol.ok, false);
+
+  // 重复支援卡条目：items、map 与回环 b64 必须保持一致（以后者覆盖为准）
+  const dupSupB64 = Buffer.from('3-0-4,3-0-1', 'utf8').toString('base64');
+  for (const mod of [WebCodec, PluginCodec]) {
+    const dupDec = mod.decodeSupportBox(dupSupB64, supportByKey);
+    assert.equal(dupDec.ok, true);
+    assert.equal(dupDec.items.length, 1);
+    assert.equal(dupDec.items[0].breakLevel, 1);
+    assert.equal(dupDec.map['3-0000'], 1);
+    assert.equal(dupDec.b64, Buffer.from('3-0-1', 'utf8').toString('base64'));
+  }
 });
 
 test('detectCodePayload 能准确区分短码、S卡、P卡与非法字符串', () => {

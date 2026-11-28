@@ -1088,14 +1088,16 @@ async function captureOnPage(
 async function renderHtmlWithLock({ getPage, html, viewportWidth = 1400, timeoutMs = RENDER_TIMEOUT_MS, label = 'BOX 拼图' }) {
   return withRenderLock(async () => {
     let page = null;
-    let pageClosed = false;
+    let closePromise = null;
     let timedOut = false;
     let timer = null;
 
     const closePageOnce = () => {
-      if (!page || pageClosed) return Promise.resolve();
-      pageClosed = true;
-      return safeClosePage(page);
+      if (!page) return Promise.resolve();
+      if (!closePromise) {
+        closePromise = safeClosePage(page);
+      }
+      return closePromise;
     };
 
     const work = (async () => {

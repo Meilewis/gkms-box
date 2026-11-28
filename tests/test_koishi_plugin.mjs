@@ -58,17 +58,42 @@ const hStub = {
     };
   },
   parse(src) {
-    const out = [];
-    const re = /<at\s+id="([^"]*)"(?:\s+name="([^"]*)")?\s*\/>/g;
+    const tokens = [];
+    const tagRe = /<\/?(?:at|quote|forward)(?:\s+[^>]*)?\/?>/g;
     let last = 0;
     let m;
-    while ((m = re.exec(src))) {
-      if (m.index > last) out.push(hStub.text(unescapeXml(src.slice(last, m.index))));
-      out.push({ type: 'at', attrs: { id: m[1], ...(m[2] ? { name: m[2] } : {}) }, children: [] });
-      last = re.lastIndex;
+    while ((m = tagRe.exec(src))) {
+      if (m.index > last) tokens.push({ type: 'text', text: unescapeXml(src.slice(last, m.index)) });
+      tokens.push({ type: 'tag', raw: m[0] });
+      last = tagRe.lastIndex;
     }
-    if (last < src.length) out.push(hStub.text(unescapeXml(src.slice(last))));
-    return out;
+    if (last < src.length) tokens.push({ type: 'text', text: unescapeXml(src.slice(last)) });
+
+    const stack = [{ children: [] }];
+    for (const tk of tokens) {
+      const top = stack[stack.length - 1];
+      if (tk.type === 'text') {
+        top.children.push(hStub.text(tk.text));
+        continue;
+      }
+      const raw = tk.raw;
+      if (raw.startsWith('</')) {
+        if (stack.length > 1) stack.pop();
+        continue;
+      }
+      const selfClosing = raw.endsWith('/>');
+      const nameMatch = /^<([a-z]+)/i.exec(raw);
+      const tagName = nameMatch ? nameMatch[1].toLowerCase() : 'unknown';
+      const idMatch = /\bid="([^"]*)"/.exec(raw);
+      const nameAttr = /\bname="([^"]*)"/.exec(raw);
+      const attrs = {};
+      if (idMatch) attrs.id = idMatch[1];
+      if (nameAttr) attrs.name = nameAttr[1];
+      const node = { type: tagName, attrs, children: [] };
+      top.children.push(node);
+      if (!selfClosing) stack.push(node);
+    }
+    return stack[0].children;
   },
 };
 
@@ -944,4 +969,268 @@ test('黑话 / 黑话表: 静态长图返回、群共享 2 分钟冷却、跨群
     })
   );
   assert.equal(resDirect.ret.type, 'image');
+});
+
+// ---------------------------------------------------------------------------
+// 回归测试：超时关闭锁等待、鉴权兼容、引用消息隔离、损坏存档提示、求解兜底与黑话热刷新
+// ---------------------------------------------------------------------------
+test('回归：renderer 超时必须等待 page.close 完成或超时后再释放渲染锁', async () => {
+  const events = [];
+  let releaseSlowClose;
+  const slowCloseGate = new Promise((r) => {
+    releaseSlowClose = r;
+  });
+
+  const slowPage = createFakePage({
+    onEvaluate: () => new Promise(() => {}),
+  });
+  slowPage.close = async () => {
+    events.push('slow-close-start');
+    await slowCloseGate;
+    slowPage.handlers.closed = true;
+    events.push('slow-close-done');
+  };
+
+  const nextPage = createFakePage();
+  const basePayload = {
+    mode: 'support',
+    ownerLabel: 'Test',
+    summary: {
+      support: { owned: 0, total: 201, maxBreakTotal: 0 },
+      cidol: { owned: 0, total: 100, ssrOwned: 0, percent: 0 },
+    },
+    supportItems: [],
+    cidolItems: [],
+    characters: {},
+  };
+
+  const p1 = Renderer.renderBoxImage({
+    getPage: async () => slowPage,
+    dataDir: DATA_DIR,
+    htmlPayload: basePayload,
+    timeoutMs: 30,
+  });
+
+  const p2 = Renderer.renderBoxImage({
+    getPage: async () => {
+      events.push('next-getPage');
+      return nextPage;
+    },
+    dataDir: DATA_DIR,
+    htmlPayload: basePayload,
+    timeoutMs: 1000,
+  });
+
+  // 即使 p1 在 30ms 时超时，只要 slowPage.close 尚未结束，p2 绝不能进入 getPage
+  await new Promise((r) => setTimeout(r, 70));
+  assert.deepEqual(events, ['slow-close-start'], 'close 完成前渲染锁不得放行下一个任务');
+
+  releaseSlowClose();
+  await assert.rejects(p1, /超时/);
+  await p2;
+  assert.deepEqual(events, ['slow-close-start', 'slow-close-done', 'next-getPage']);
+});
+
+test('回归：adminAuth/isAdmin 绕过、quote 隔离、@自己+@他人 拦截、损坏存档提示、求解异常退冷却与黑话热刷新', async (t) => {
+  const db = createMockDb();
+  const ctx = createMockCtx(db, { cooldownSeconds: 60, slangCooldownSeconds: 120 });
+  ctx.adminAuth = {
+    isAdmin(s) {
+      return s.userId === 'auth-admin';
+    },
+  };
+
+  // 1. 管理员绕过：仅 _isAdmin 或仅 ctx.adminAuth.isAdmin（无 _adminBypass）在黑话、查box、hif配卡均生效
+  const sNormal = await ctx.dispatch(createSession('黑话', { guildId: 'g-auth', userId: 'normal1' }));
+  assert.equal(sNormal.ret.type, 'image');
+  const sBlocked = await ctx.dispatch(createSession('黑话', { guildId: 'g-auth', userId: 'normal2' }));
+  assert.equal(sBlocked.ret.type, 'text');
+  assert.match(sBlocked.ret.attrs.content, /冷却中/);
+
+  const sIsAdmin = await ctx.dispatch(
+    createSession('黑话', { guildId: 'g-auth', userId: 'u-is-admin', _isAdmin: true })
+  );
+  assert.equal(sIsAdmin.ret.type, 'image');
+
+  const sAuthAdmin = await ctx.dispatch(
+    createSession('黑话', { guildId: 'g-auth', userId: 'auth-admin' })
+  );
+  assert.equal(sAuthAdmin.ret.type, 'image');
+
+  await db.upsert('gkms_box_binding', [
+    {
+      userKey: 'qq:auth-admin',
+      shortCode: '',
+      supportCode:
+        'My0xMjItNCwzLTExNC0xLDMtMTEwLTQsMy0xMDctNCwzLTk2LTEsMy05NC0xLDMtOTItMCwzLTkwLTAsMy04OS0xLDMtODMtMSwzLTgyLTEsMy04MS0xLDMtNzktMSwzLTc4LTEsMy03Ni0wLDMtNzAtMCwzLTY5LTQsMy02Ni00LDMtNjQtNCwzLTYyLTAsMy01OC0zLDMtNTctMCwzLTU1LTAsMy00Ni0wLDMtNDQtMCwzLTQyLTAsMy0zNy0wLDMtMzUtMCwzLTM0LTMsMy0zMS0wLDMtMjgtMSwzLTI3LTMsMy0yNS00LDMtMjQtMCwzLTIyLTEsMy0xOC0wLDMtMTctMCwzLTE2LTAsMy0xMy0wLDMtMTItMSwzLTExLTIsMy05LTQsMy03LTQsMy02LTAsMy01LTQsMy00LTAsMy0zLTAsMy0yLTQsMy0wLTAsMi04Mi0wLDItODEtMCwyLTcyLTQsMi02OC0wLDItNjEtNCwyLTQzLTQsMi03LTQsMi0zLTQsMi0xLTQ=',
+      cidolCode: '',
+      supportCount: 58,
+      cidolCount: 0,
+      updatedAt: new Date(),
+    },
+  ]);
+  const sQ1 = createSession('查box', { userId: 'auth-admin' });
+  const qAuth1 = await ctx.dispatch(sQ1);
+  assert.equal(qAuth1.nextCalled, false);
+  assert.equal(sQ1.sent.length, 1);
+  const sQ2 = createSession('查box', { userId: 'auth-admin' });
+  const qAuth2 = await ctx.dispatch(sQ2);
+  assert.equal(qAuth2.nextCalled, false);
+  assert.equal(sQ2.sent.length, 1);
+  const hAuth1 = await ctx.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'auth-admin' }));
+  assert.equal(hAuth1.ret.type, 'image');
+  const hAuth2 = await ctx.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'auth-admin' }));
+  assert.equal(hAuth2.ret.type, 'image');
+
+  // 2. 纯 quote+image 消息（含 quote 内指令文本与 @bot）不跌落、不误触发
+  const pureQuoteSess = createSession('', {
+    guildId: 'g-quote',
+    content: '<quote id="q1"><at id="bot001"/> 黑话</quote><image url="https://example.com/a.png"/>',
+    elements: [
+      {
+        type: 'quote',
+        attrs: { id: 'q1' },
+        children: [
+          { type: 'at', attrs: { id: 'bot001' }, children: [] },
+          { type: 'text', attrs: { content: ' 黑话' }, children: [] },
+        ],
+      },
+      { type: 'image', attrs: { url: 'https://example.com/a.png' }, children: [] },
+    ],
+    stripped: { appel: true, content: '黑话' },
+  });
+  assert.equal(Plugin.extractPlainText(pureQuoteSess), '');
+  assert.equal((await ctx.dispatch(pureQuoteSess)).nextCalled, true);
+
+  // elements 为空时 fallback 正则也必须先剥离 <quote>...</quote>
+  assert.equal(
+    Plugin.extractPlainText({
+      elements: [],
+      content: '<quote id="q1">黑话</quote> <at id="bot001"/>',
+    }),
+    ''
+  );
+
+  // isMentioningBot: selfId 为空不触发；支持 h.parse(content) 兜底；跳过 quote 内 @bot
+  assert.equal(
+    Plugin.isMentioningBot({ selfId: '', elements: [{ type: 'at', attrs: { id: '' }, children: [] }] }),
+    false
+  );
+  assert.equal(
+    Plugin.isMentioningBot({ selfId: 'bot001', elements: [], content: '<at id="bot001"/> 查box' }),
+    true
+  );
+  assert.equal(
+    Plugin.isMentioningBot({
+      selfId: 'bot001',
+      elements: [],
+      content: '<quote id="q1"><at id="bot001"/></quote> 查box',
+    }),
+    false
+  );
+
+  // 3. extractTargetMention: 跳过 quote 内的 @other，不误拦截；先 @自己 再 @他人 时必须拦截
+  const quoteWithOtherAt = createSession('查box', {
+    userId: 'auth-admin',
+    elements: [
+      {
+        type: 'quote',
+        attrs: { id: 'q2' },
+        children: [{ type: 'at', attrs: { id: 'other888' }, children: [] }],
+      },
+      { type: 'at', attrs: { id: 'bot001' }, children: [] },
+      { type: 'text', attrs: { content: ' 查box' }, children: [] },
+    ],
+  });
+  assert.equal(Plugin.extractTargetMention(quoteWithOtherAt), null);
+  const qQuoteRes = await ctx.dispatch(quoteWithOtherAt);
+  assert.equal(qQuoteRes.nextCalled, false);
+  assert.equal(quoteWithOtherAt.sent.length, 1);
+
+  const selfThenOther = createSession('查box', {
+    userId: 'auth-admin',
+    elements: [
+      { type: 'at', attrs: { id: 'bot001' }, children: [] },
+      { type: 'at', attrs: { id: 'auth-admin' }, children: [] },
+      { type: 'at', attrs: { id: 'other888' }, children: [] },
+      { type: 'text', attrs: { content: ' 查box' }, children: [] },
+    ],
+  });
+  const blockedSelfOther = await ctx.dispatch(selfThenOther);
+  assert.equal(blockedSelfOther.ret.type, 'text');
+  assert.match(blockedSelfOther.ret.attrs.content, /不支持 @群友/);
+
+  // 4. 查box 遇到非空但解码失败的绑定数据时明确提示无效/目录不匹配，不再静默为空 BOX
+  await db.upsert('gkms_box_binding', [
+    {
+      userKey: 'qq:bad-archive',
+      shortCode: '',
+      supportCode: Buffer.from('3-9999-4', 'utf8').toString('base64'),
+      cidolCode: '',
+      supportCount: 1,
+      cidolCount: 0,
+      updatedAt: new Date(),
+    },
+  ]);
+  const badArchiveRes = await ctx.dispatch(createSession('查box', { userId: 'bad-archive' }));
+  assert.equal(badArchiveRes.ret.type, 'text');
+  assert.match(badArchiveRes.ret.attrs.content, /无效|不匹配/);
+  assert.ok(ctx.logs.warn.some((w) => w.includes('解码已绑定数据失败')));
+
+  // 5. solveBestHifDeck 抛出异常时必须捕获、退还冷却并返回兜底提示
+  const HifPlanner = require(path.join(ROOT, 'koishi-plugin', 'hif-planner.js'));
+  let throwOnce = true;
+  const origSolve = HifPlanner.solveBestHifDeck;
+  t.mock.method(HifPlanner, 'solveBestHifDeck', (...args) => {
+    if (throwOnce) {
+      throwOnce = false;
+      throw new Error('unexpected solver failure');
+    }
+    return origSolve(...args);
+  });
+  await db.upsert('gkms_box_binding', [
+    {
+      userKey: 'qq:solve-err',
+      shortCode: '',
+      supportCode:
+        'My0xMjItNCwzLTExNC0xLDMtMTEwLTQsMy0xMDctNCwzLTk2LTEsMy05NC0xLDMtOTItMCwzLTkwLTAsMy04OS0xLDMtODMtMSwzLTgyLTEsMy04MS0xLDMtNzktMSwzLTc4LTEsMy03Ni0wLDMtNzAtMCwzLTY5LTQsMy02Ni00LDMtNjQtNCwzLTYyLTAsMy01OC0zLDMtNTctMCwzLTU1LTAsMy00Ni0wLDMtNDQtMCwzLTQyLTAsMy0zNy0wLDMtMzUtMCwzLTM0LTMsMy0zMS0wLDMtMjgtMSwzLTI3LTMsMy0yNS00LDMtMjQtMCwzLTIyLTEsMy0xOC0wLDMtMTctMCwzLTE2LTAsMy0xMy0wLDMtMTItMSwzLTExLTIsMy05LTQsMy03LTQsMy02LTAsMy01LTQsMy00LTAsMy0zLTAsMy0yLTQsMy0wLTAsMi04Mi0wLDItODEtMCwyLTcyLTQsMi02OC0wLDItNjEtNCwyLTQzLTQsMi03LTQsMi0zLTQsMi0xLTQ=',
+      cidolCode: '',
+      supportCount: 58,
+      cidolCount: 0,
+      updatedAt: new Date(),
+    },
+  ]);
+  const solveErrRes = await ctx.dispatch(
+    createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'solve-err' })
+  );
+  assert.equal(solveErrRes.ret.type, 'text');
+  assert.match(solveErrRes.ret.attrs.content, /计算暂时失败/);
+  // 因异常退还了冷却，紧接着重试应成功出图
+  const solveRetryRes = await ctx.dispatch(
+    createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'solve-err' })
+  );
+  assert.equal(solveRetryRes.ret.type, 'image');
+
+  // 6. 黑话表图片优先从外部 dataDir 读取，且文件变化时支持热刷新
+  const tmpDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gkms-slang-hot-'));
+  try {
+    fs.mkdirSync(path.join(tmpDataDir, 'data'), { recursive: true });
+    fs.copyFileSync(path.join(DATA_DIR, 'data', 'characters.json'), path.join(tmpDataDir, 'data', 'characters.json'));
+    fs.copyFileSync(path.join(DATA_DIR, 'data', 'support.json'), path.join(tmpDataDir, 'data', 'support.json'));
+    fs.copyFileSync(path.join(DATA_DIR, 'data', 'cidol.json'), path.join(tmpDataDir, 'data', 'cidol.json'));
+    const slangFile = path.join(tmpDataDir, 'data', 's_card_slang_sheet.jpg');
+    fs.writeFileSync(slangFile, Buffer.from('SLANG_V1'));
+
+    const hotCtx = createMockCtx(db, { dataDir: tmpDataDir, slangCooldownSeconds: 0 });
+    const v1Res = await hotCtx.dispatch(createSession('黑话', { userId: 'hot1' }));
+    assert.equal(v1Res.ret.type, 'image');
+    assert.equal(v1Res.ret.attrs.data.toString('utf8'), 'SLANG_V1');
+
+    fs.writeFileSync(slangFile, Buffer.from('SLANG_V2_UPDATED'));
+    const v2Res = await hotCtx.dispatch(createSession('黑话', { userId: 'hot1' }));
+    assert.equal(v2Res.ret.type, 'image');
+    assert.equal(v2Res.ret.attrs.data.toString('utf8'), 'SLANG_V2_UPDATED');
+  } finally {
+    fs.rmSync(tmpDataDir, { recursive: true, force: true });
+  }
 });

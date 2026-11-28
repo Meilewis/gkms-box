@@ -4,11 +4,17 @@
   "description": "《学园偶像大师》BOX 绑定、统计查询与离线 Puppeteer 拼图生成 Koishi 插件",
   "main": "index.js",
   "license": "MIT",
+  "peerDependencies": {
+    "koishi": "^4.15.0"
+  },
   "koishi": {
     "service": {
       "required": [
         "database",
         "puppeteer"
+      ],
+      "optional": [
+        "adminAuth"
       ]
     }
   }

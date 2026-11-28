@@ -439,4 +439,18 @@ test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求�
   assert.ok(owl0 && owl6 && owlB46, '5 张测试 BOX 下猫头鹰应上阵');
   assert.equal(owl6.flat - owl0.flat, 66, 'B41=6 应精确为猫头鹰增加 6×11=+66 固值');
   assert.equal(owlB46.flat, owl0.flat, '仅改 B46 不应联动影响 B41 敲卡固值');
+
+  // 8. 全部 27 个可编辑参数设最大值时编码与解码往返成功（长度超过旧 256 上限但不超 384）
+  const allMaxParams = HifParamsCodec.getDefaultParams();
+  for (const k of HifParamsCodec.ALL_KEYS) {
+    const spec = HifParamsCodec.PARAM_SPECS[k];
+    if (!spec.locked) allMaxParams[k] = spec.max;
+  }
+  const allMaxCode = HifParamsCodec.encodeHifParams(allMaxParams);
+  assert.ok(allMaxCode.length > 256 && allMaxCode.length <= HifParamsCodec.MAX_CODE_CHARS);
+  const allMaxDec = HifParamsCodec.decodeHifParams(allMaxCode);
+  assert.equal(allMaxDec.ok, true, `全参最大值解码失败: ${allMaxDec.error}`);
+  assert.equal(allMaxDec.code, allMaxCode);
+  assert.equal(allMaxDec.fullParams.mp1, 100);
+  assert.equal(allMaxDec.fullParams.B40, 60);
 });

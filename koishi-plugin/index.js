@@ -9,7 +9,13 @@ const HifPlanner = require('./hif-planner');
 const HifParamsCodec = require('./hif-params-codec');
 
 const name = 'gkms-box';
-const inject = ['database', 'puppeteer'];
+const inject = {
+  required: ['database', 'puppeteer'],
+  optional: ['adminAuth'],
+};
+
+const SKIP_CONTAINER_TAGS = new Set(['quote', 'forward']);
+const SKIP_TEXT_TAGS = new Set(['at', 'quote', 'forward']);
 
 const MAX_RENDER_PENDING = 4;
 const COOLDOWN_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
@@ -111,12 +117,50 @@ function loadCatalog(dataDir) {
   return { characters, support, supportByKey, cidol, cidolByKey, meta };
 }
 
+function isAdminSession(ctx, session) {
+  if (!session || typeof session !== 'object') return false;
+  if (session._isAdmin === true || session._adminBypass === true) return true;
+  try {
+    if (ctx && ctx.adminAuth && typeof ctx.adminAuth.isAdmin === 'function') {
+      return Boolean(ctx.adminAuth.isAdmin(session));
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
+}
+
+function hasMentionTargetInElements(nodes, targetId) {
+  if (!Array.isArray(nodes) || !targetId) return false;
+  for (const el of nodes) {
+    if (!el || typeof el !== 'object') continue;
+    if (SKIP_CONTAINER_TAGS.has(el.type)) continue;
+    if (el.type === 'at' && el.attrs && el.attrs.id !== undefined && String(el.attrs.id) === targetId) {
+      return true;
+    }
+    if (Array.isArray(el.children) && hasMentionTargetInElements(el.children, targetId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isMentioningBot(session) {
+  if (!session || typeof session !== 'object') return false;
   if (session.stripped && session.stripped.appel) return true;
-  if (!session.selfId || !Array.isArray(session.elements)) return false;
-  return session.elements.some(
-    (el) => el && el.type === 'at' && el.attrs && String(el.attrs.id) === String(session.selfId)
-  );
+  const selfId = session.selfId ? String(session.selfId) : '';
+  if (!selfId) return false;
+  if (Array.isArray(session.elements) && session.elements.length > 0) {
+    return hasMentionTargetInElements(session.elements, selfId);
+  }
+  if (typeof session.content === 'string' && session.content.includes('<at')) {
+    try {
+      return hasMentionTargetInElements(h.parse(session.content), selfId);
+    } catch (_) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function canTriggerInSession(config, session) {
@@ -125,55 +169,82 @@ function canTriggerInSession(config, session) {
   return isMentioningBot(session);
 }
 
+function collectPlainTextFromElements(nodes, parts) {
+  if (!Array.isArray(nodes)) return;
+  for (const el of nodes) {
+    if (!el || typeof el !== 'object') continue;
+    if (SKIP_TEXT_TAGS.has(el.type)) continue;
+    if (el.type === 'text' && el.attrs && typeof el.attrs.content === 'string') {
+      parts.push(el.attrs.content);
+    }
+    if (Array.isArray(el.children) && el.children.length > 0) {
+      collectPlainTextFromElements(el.children, parts);
+    }
+  }
+}
+
 function extractPlainText(session) {
+  if (!session || typeof session !== 'object') return '';
   if (Array.isArray(session.elements) && session.elements.length > 0) {
     const parts = [];
-    for (const el of session.elements) {
-      if (el && el.type === 'text' && el.attrs && typeof el.attrs.content === 'string') {
-        parts.push(el.attrs.content);
-      }
-    }
-    if (parts.length > 0) {
-      return parts.join(' ').replace(/\s+/g, ' ').trim();
-    }
+    collectPlainTextFromElements(session.elements, parts);
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
   }
   const fallback =
     session.stripped && typeof session.stripped.content === 'string'
       ? session.stripped.content
       : session.content || '';
-  return fallback.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return String(fallback)
+    .replace(/<quote\b[^>]*>[\s\S]*?<\/quote>/gi, ' ')
+    .replace(/<forward\b[^>]*>[\s\S]*?<\/forward>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function findOtherAtElement(nodes, selfId) {
-  if (!Array.isArray(nodes)) return null;
+function collectOtherAtElements(nodes, selfId, out) {
+  if (!Array.isArray(nodes)) return;
   for (const el of nodes) {
-    if (!el) continue;
+    if (!el || typeof el !== 'object') continue;
+    if (SKIP_CONTAINER_TAGS.has(el.type)) continue;
     if (
       el.type === 'at' &&
       el.attrs &&
-      el.attrs.id &&
-      String(el.attrs.id) !== String(selfId || '')
+      el.attrs.id !== undefined &&
+      el.attrs.id !== '' &&
+      (!selfId || String(el.attrs.id) !== selfId)
     ) {
-      return {
+      out.push({
         id: String(el.attrs.id),
         name: el.attrs.name ? String(el.attrs.name) : '',
-      };
+      });
     }
-    if (Array.isArray(el.children)) {
-      const nested = findOtherAtElement(el.children, selfId);
-      if (nested) return nested;
+    if (Array.isArray(el.children) && el.children.length > 0) {
+      collectOtherAtElements(el.children, selfId, out);
     }
   }
-  return null;
+}
+
+function findOtherAtElement(nodes, selfId, userId = '') {
+  const ats = [];
+  collectOtherAtElements(nodes, selfId ? String(selfId) : '', ats);
+  if (!ats.length) return null;
+  if (userId) {
+    const other = ats.find((a) => a.id !== String(userId));
+    if (other) return other;
+  }
+  return ats[0];
 }
 
 function extractTargetMention(session) {
   if (!session || typeof session !== 'object') return null;
-  const fromEls = findOtherAtElement(session.elements, session.selfId);
-  if (fromEls) return fromEls;
+  const userId = session.userId ? String(session.userId) : '';
+  if (Array.isArray(session.elements) && session.elements.length > 0) {
+    return findOtherAtElement(session.elements, session.selfId, userId);
+  }
   if (typeof session.content === 'string' && session.content.includes('<at')) {
     try {
-      return findOtherAtElement(h.parse(session.content), session.selfId);
+      return findOtherAtElement(h.parse(session.content), session.selfId, userId);
     } catch (_) {
       return null;
     }
@@ -279,15 +350,34 @@ function resolveSlangCooldownKey(session) {
   return `${platform}:user:${uid}`;
 }
 
-function loadSlangSheetBuffer(dataDir) {
+function loadSlangSheetBuffer(dataDir, cached = null) {
   const candidates = [
-    path.join(__dirname, 'data', 's_card_slang_sheet.jpg'),
     path.join(dataDir, 'data', 's_card_slang_sheet.jpg'),
+    path.join(__dirname, 'data', 's_card_slang_sheet.jpg'),
   ];
   for (const filePath of candidates) {
-    if (fs.existsSync(filePath)) {
-      return { filePath, buffer: fs.readFileSync(filePath) };
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (_) {
+      continue;
     }
+    if (!stat.isFile()) continue;
+    if (
+      cached &&
+      cached.filePath === filePath &&
+      cached.mtimeMs === stat.mtimeMs &&
+      cached.size === stat.size &&
+      Buffer.isBuffer(cached.buffer)
+    ) {
+      return cached;
+    }
+    return {
+      filePath,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      buffer: fs.readFileSync(filePath),
+    };
   }
   return null;
 }
@@ -604,18 +694,17 @@ function apply(ctx, config) {
     }
 
     if (isSlang) {
-      if (!slangSheet) {
-        try {
-          slangSheet = loadSlangSheetBuffer(dataDir);
-        } catch (_) {
-          slangSheet = null;
-        }
+      try {
+        slangSheet = loadSlangSheetBuffer(dataDir, slangSheet);
+      } catch (err) {
+        logger.warn('刷新 S 卡黑话对照表失败：%s', err && err.message ? err.message : err);
+        slangSheet = null;
       }
       if (!slangSheet || !slangSheet.buffer) {
         return textReply('S 卡黑话对照表尚未准备就绪，请联系管理员检查 s_card_slang_sheet.jpg 文件。');
       }
 
-      const isBypass = Boolean(session && session._adminBypass);
+      const isBypass = isAdminSession(ctx, session);
       const slangCdSec =
         config.slangCooldownSeconds === undefined ? 120 : Number(config.slangCooldownSeconds) || 0;
       const slangCdMs = slangCdSec * 1000;
@@ -794,6 +883,19 @@ function apply(ctx, config) {
       const binding = rows[0];
       const decSup = Codec.decodeSupportBox(binding.supportCode || '', catalog.supportByKey);
       const decCid = Codec.decodeCidolBox(binding.cidolCode || '', catalog.cidolByKey);
+      if ((binding.supportCode && !decSup.ok) || (binding.cidolCode && !decCid.ok)) {
+        logger.warn(
+          '[%s] 查box 解码已绑定数据失败 supOk=%s(%s) cidOk=%s(%s)',
+          userKey,
+          decSup.ok,
+          decSup.error || '',
+          decCid.ok,
+          decCid.error || ''
+        );
+        return textReply(
+          `你绑定的 BOX 数据已无效或与当前卡池目录不匹配，请重新发送「@${botName} 绑定 <代码>」更新 BOX。`
+        );
+      }
       const supportMap = decSup.ok ? decSup.map : {};
       const cidolSet = decCid.ok ? decCid.set : {};
 
@@ -838,7 +940,7 @@ function apply(ctx, config) {
         return textReply(`${ownerLabel} 绑定的 BOX 目前为空。`);
       }
 
-      const isBypass = Boolean(session && session._adminBypass);
+      const isBypass = isAdminSession(ctx, session);
       const cdMs = (config.cooldownSeconds || 0) * 1000;
       if (!isBypass && cdMs > 0) {
         const lastTs = renderCooldowns.get(userKey) || 0;
@@ -980,7 +1082,7 @@ function apply(ctx, config) {
         return textReply(formatHifResolveError(resolved, botName));
       }
 
-      const isBypass = Boolean(session && session._adminBypass);
+      const isBypass = isAdminSession(ctx, session);
       const cdMs = (config.cooldownSeconds || 0) * 1000;
       if (!isBypass && cdMs > 0) {
         const lastTs = renderCooldowns.get(userKey) || 0;
@@ -1001,7 +1103,14 @@ function apply(ctx, config) {
 
       const boxLbs = buildFullSupportBoxLbs(catalog.support, decSup.map);
       const solveOptions = extractedParams.hasParams ? extractedParams.decoded.solveOptions : {};
-      const solved = HifPlanner.solveBestHifDeck(resolved.idol, boxLbs, hifEngine, catalog.supportByKey, solveOptions);
+      let solved;
+      try {
+        solved = HifPlanner.solveBestHifDeck(resolved.idol, boxLbs, hifEngine, catalog.supportByKey, solveOptions);
+      } catch (err) {
+        renderCooldowns.delete(userKey);
+        logger.error('HIF 配卡求解失败：%s', err && err.stack ? err.stack : err);
+        return textReply('HIF 配卡计算暂时失败，请稍后重试。');
+      }
       if (!solved.ok) {
         renderCooldowns.delete(userKey);
         return textReply(solved.error);
@@ -1054,6 +1163,7 @@ module.exports = {
   Config,
   apply,
   CHAR_ALIASES,
+  isAdminSession,
   isMentioningBot,
   canTriggerInSession,
   extractPlainText,

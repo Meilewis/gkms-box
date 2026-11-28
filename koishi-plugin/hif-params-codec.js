@@ -10,8 +10,8 @@
   'use strict';
 
   const PREFIX = 'hp1_';
-  const MAX_CODE_CHARS = 256;
-  const CODE_FORMAT_RE = /^hp1_[A-Za-z0-9_-]{2,252}$/;
+  const MAX_CODE_CHARS = 384;
+  const CODE_FORMAT_RE = /^hp1_[A-Za-z0-9_-]{2,380}$/;
   const ENTRY_KV_RE = /^([A-Za-z][A-Za-z0-9]*)=(-?\d+(?:\.\d+)?)$/;
 
   const PARAM_GROUPS = [
