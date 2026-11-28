@@ -7,3 +7,8 @@ koishi-plugin/assets/
 koishi-plugin/data/bindings.db
 *.tmp
 output/
+exporter/build/
+exporter/dist/
+exporter/game_env/
+exporter/*.spec
+exporter/gkms-game-dir.txt
