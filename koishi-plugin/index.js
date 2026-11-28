@@ -39,40 +39,68 @@ const CHAR_ALIASES = {
   ttmr: ['ttmr', '月村手毬', '月村', '手毬', '手球'],
 };
 
-const Config = Schema.object({
-  webUrl: Schema.string()
-    .default('')
-    .description('前端 BOX 录入网页地址（部署到 Cloudflare Pages 并绑定自定义域名后填入，例如 https://box.example.com）'),
-  apiBaseUrl: Schema.string()
-    .default('')
-    .description('短码后端接口根地址（留空时自动复用 webUrl）'),
-  dataDir: Schema.string()
-    .default('gkms-box')
-    .description('卡池 JSON 与本地卡面图片目录（相对 Koishi 工作目录或绝对路径）'),
-  requireAt: Schema.boolean()
-    .default(true)
-    .description('群聊中是否需要 @机器人 才响应 BOX 指令'),
-  allowDirectWithoutAt: Schema.boolean()
-    .default(true)
-    .description('私聊/单聊是否允许不 @ 直接触发'),
-  cooldownSeconds: Schema.natural()
-    .default(20)
-    .description('每人连续查box/晒box拼图冷却秒数（防刷图拖慢响应）'),
-  slangCooldownSeconds: Schema.natural()
-    .default(120)
-    .description('黑话表长图冷却秒数（群聊按群共享，私聊按人独立，默认 120 秒）'),
-  bindSuccessRecallSeconds: Schema.natural()
-    .max(120)
-    .default(30)
-    .description('BOX 绑定成功提示发出后自动撤回的秒数（0 表示不自动撤回；QQ 官方限制须在 120 秒内）'),
-  boxQueryRecallSeconds: Schema.natural()
-    .max(120)
-    .default(30)
-    .description('查box/晒box 拼图发出后自动撤回的秒数（0 表示不自动撤回；QQ 官方限制须在 120 秒内）'),
-  botDisplayName: Schema.string()
-    .default('Bot')
-    .description('提示文案中显示的机器人名称'),
-});
+const Config = Schema.intersect([
+  Schema.object({
+    webUrl: Schema.string()
+      .role('link')
+      .default('')
+      .description('前端 BOX 录入网页地址（部署到 Cloudflare Pages 并绑定自定义域名后填入，例如 https://box.example.com）'),
+    apiBaseUrl: Schema.string()
+      .role('link')
+      .default('')
+      .description('短码后端接口根地址（留空时自动复用 webUrl）'),
+    dataDir: Schema.string()
+      .default('gkms-box')
+      .description('卡池 JSON 与本地卡面图片目录（相对 Koishi 工作目录或绝对路径）'),
+    botDisplayName: Schema.string()
+      .default('Bot')
+      .description('提示文案中显示的机器人名称'),
+  }).description('网页端与数据目录'),
+  Schema.object({
+    requireAt: Schema.boolean()
+      .default(true)
+      .description('群聊中是否需要 @机器人 才响应 BOX 指令'),
+    allowDirectWithoutAt: Schema.boolean()
+      .default(true)
+      .description('私聊/单聊是否允许不 @ 直接触发'),
+    cooldownSeconds: Schema.natural()
+      .default(20)
+      .description('每人连续查box/晒box拼图冷却秒数（防刷图拖慢响应）'),
+    slangCooldownSeconds: Schema.natural()
+      .default(120)
+      .description('黑话表长图冷却秒数（群聊按群共享，私聊按人独立，默认 120 秒）'),
+  }).description('触发与冷却设置'),
+  Schema.object({
+    bindSuccessRecallSeconds: Schema.natural()
+      .max(120)
+      .step(5)
+      .role('slider')
+      .default(30)
+      .description('BOX 绑定成功提示发出后自动撤回的秒数（0 表示不自动撤回；QQ 官方限制须在 120 秒内）'),
+    boxQueryRecallSeconds: Schema.natural()
+      .max(120)
+      .step(5)
+      .role('slider')
+      .default(30)
+      .description('查box/晒box 拼图发出后自动撤回的秒数（0 表示不自动撤回；QQ 官方限制须在 120 秒内）'),
+  }).description('消息自动撤回设置'),
+]);
+
+const usage = `
+## 《学园偶像大师》BOX 绑定与配卡助手
+
+### 常用指令（群聊默认需 @机器人）
+- \`绑定\` / \`box帮助\`：查看网页录入地址与使用说明
+- \`绑定 <短码或Base64>\`：绑定或更新个人角色/支援卡 BOX（可从 \`webUrl\` 网页导出，如 \`绑定 g12345678\`）
+- \`查box\` / \`晒box\`：生成个人持卡统计与离线拼图（仅支持查自己，支持 \`支援卡\` / \`P卡\` / 角色名筛选，如 \`查box 筱泽广\`）
+- \`解绑box\`：清除已绑定的 BOX 存档
+- \`hif配卡 <P卡名/角色+流派> [hp1_参数码]\`：基于已绑定 BOX 计算最优 HIF 6 卡推荐并出图（如 \`hif配卡 香名江\`、\`hif配卡 莉波 感性\`）
+- \`黑话\` / \`黑话表\`：查看《学园偶像大师》S 卡昵称与黑话对照长图（群聊按群共享冷却）
+
+### 服务依赖与机制说明
+- **依赖服务**：必需 \`database\` + \`puppeteer\`；可选 \`adminAuth\`（管理员可绕过 \`查box\` / \`hif配卡\` 与 \`黑话\` 冷却）。
+- **黑话表热刷新**：优先加载 \`<dataDir>/data/s_card_slang_sheet.jpg\`，其次回退插件内置图；更新文件后下次触发自动热刷新。
+`.trim();
 
 /**
  * 统一的纯文本回复：一律包装为 text 元素，内容中的 < > & 等字符不会被解析为消息元素
@@ -1161,6 +1189,7 @@ module.exports = {
   name,
   inject,
   Config,
+  usage,
   apply,
   CHAR_ALIASES,
   isAdminSession,

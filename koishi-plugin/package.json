@@ -8,6 +8,9 @@
     "koishi": "^4.15.0"
   },
   "koishi": {
+    "description": {
+      "zh": "《学园偶像大师》BOX 绑定、统计查询、HIF 推荐配卡与黑话表 Koishi 插件"
+    },
     "service": {
       "required": [
         "database",

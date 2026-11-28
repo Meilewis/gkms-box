@@ -1234,3 +1234,16 @@ test('回归：adminAuth/isAdmin 绕过、quote 隔离、@自己+@他人 拦截�
     fs.rmSync(tmpDataDir, { recursive: true, force: true });
   }
 });
+
+test('控制台配置导出：usage 与分组 Config 完整存在', () => {
+  assert.equal(typeof Plugin.usage, 'string');
+  assert.ok(Plugin.usage.includes('绑定'));
+  assert.ok(Plugin.usage.includes('查box'));
+  assert.ok(Plugin.usage.includes('hif配卡'));
+  assert.ok(Plugin.usage.includes('黑话'));
+  assert.ok(Plugin.usage.includes('database'));
+  assert.ok(Plugin.usage.includes('puppeteer'));
+  assert.ok(Plugin.usage.includes('adminAuth'));
+  assert.ok(Plugin.usage.includes('s_card_slang_sheet.jpg'));
+  assert.ok(Plugin.Config);
+});
