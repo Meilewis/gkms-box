@@ -1346,7 +1346,7 @@ test('更新支援卡表: 权限隔离、路径越界拦截、端到端热重载
   });
   const corruptRes = await ctx.dispatch(createSession('更新支援卡表', { userId: 'admin-u1' }));
   assert.equal(corruptRes.ret.type, 'text');
-  assert.match(corruptRes.ret.attrs.content, /原有数据未被修改/);
+  assert.match(corruptRes.ret.attrs.content, /HIF 公式与黑话图未被修改/);
   assert.deepEqual(fs.readFileSync(path.join(dataSub, 'hif_cards.json')), prevHifBytes);
 
   // 4. 若本地存在真实 11.27 xlsx，测试完整端到端热更新与上游失败脱敏降级

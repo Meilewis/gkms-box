@@ -263,9 +263,9 @@ def main():
                 continue
 
             card = sec_cards[idx]
-            am = ATTR_META[card["attr"]]
+            am = ATTR_META.get(card["attr"], ATTR_META[1])
             rm = RARITY_META.get(card["rarity"], RARITY_META[2])
-            pm = PLAN_META[card["plan"]]
+            pm = PLAN_META.get(card["plan"], PLAN_META[0])
 
             draw.rectangle((cx1, cy1, cx2, cy2), fill=BG_COLOR)
             draw.rectangle((cx1 + 1, cy1 + 1, cx2 - 1, cy1 + 2), fill=am["accent"])

@@ -88,7 +88,7 @@ const Config = Schema.intersect([
   Schema.object({
     supportXlsxPath: Schema.string()
       .default('support_cards.xlsx')
-      .description('NAS 本地映射的飞书支援卡表格路径（默认位于 <dataDir>/support_cards.xlsx，亦可填绝对路径或相对于 baseDir 的路径）'),
+      .description('服务器本地映射的飞书支援卡表格路径（如云主机或 NAS 数据目录，默认位于 <dataDir>/support_cards.xlsx，亦可填绝对路径或相对于 baseDir 的路径）'),
     syncUpstreamCatalog: Schema.boolean()
       .default(true)
       .description('触发更新时是否顺带在线拉取上游最新 support.json / cidol.json 目录（失败自动降级使用本地目录）'),
@@ -909,8 +909,8 @@ function apply(ctx, config) {
           nextEngine = HifPlanner.buildHifEngineFromData(extractedPayload, hifTargetPath);
         } catch (err) {
           const safeMsg = HifXlsxImporter.sanitizeErrorText(err && err.message ? err.message : err);
-          logger.error('[admin-update] 表格解析或内存验算失败，未覆盖线上数据：%s', safeMsg);
-          return textReply(`更新支援卡表失败（原有数据未被修改）：${truncateText(safeMsg, 180)}`);
+          logger.error('[admin-update] 表格解析或内存验算失败，未覆盖线上 HIF 公式与黑话图：%s', safeMsg);
+          return textReply(`更新支援卡表失败（原有 HIF 公式与黑话图未被修改）：${truncateText(safeMsg, 180)}`);
         }
 
         const prevKeys = new Set(

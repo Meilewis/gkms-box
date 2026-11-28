@@ -7,14 +7,14 @@ const MAX_JPEG_BYTES = 2850000;
 const SLANG_MAX_JPEG_BYTES = 6 * 1024 * 1024;
 const SLANG_HARD_LIMIT_BYTES = 12 * 1024 * 1024;
 const SLANG_CANVAS_WIDTH = 1856;
-const SLANG_TIMEOUT_MS = 45000;
-const RENDER_TIMEOUT_MS = 25000;
+const SLANG_TIMEOUT_MS = 60000;
+const RENDER_TIMEOUT_MS = 50000;
 const ASSET_WAIT_MS = 10000;
 const PAGE_CLOSE_WAIT_MS = 5000;
 const MAX_SCALE = 1.5;
 const MIN_SCALE = 0.5;
 const MAX_OUTPUT_HEIGHT_PX = 15000;
-const DATA_URL_CACHE_MAX_CHARS = 96 * 1024 * 1024;
+const DATA_URL_CACHE_MAX_CHARS = 48 * 1024 * 1024;
 const HIF_CANVAS_WIDTH = 1200;
 
 let renderQueue = Promise.resolve();
@@ -1504,8 +1504,13 @@ async function renderSlangSheetImage({ getPage, dataDir, cards, supportCatalog, 
     maxOutputHeightPx: 16000,
     maxJpegBytes: SLANG_MAX_JPEG_BYTES,
   });
-  if (rendered && rendered.buffer && rendered.buffer.length > SLANG_HARD_LIMIT_BYTES) {
-    return { ...rendered, oversized: true };
+  if (rendered && rendered.buffer) {
+    if (rendered.buffer.length > SLANG_HARD_LIMIT_BYTES) {
+      return { ...rendered, oversized: true };
+    }
+    if (rendered.oversized) {
+      return { ...rendered, oversized: false };
+    }
   }
   return rendered;
 }
