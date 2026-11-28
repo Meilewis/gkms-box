@@ -137,6 +137,48 @@ test('detectCodePayload 能准确区分短码、S卡、P卡与非法字符串', 
   assert.equal(summaryProto.cidol.owned, 0);
 });
 
+test('兼容 Box导出器 旧版等级长码与带特训潜能后缀的 P 卡长码', () => {
+  // 1. 支援卡旧版等级码（SSR 40/45/50/55/60，SR 30/35/40/45/50）
+  const legacySupB64 = Buffer.from('3-0100-42,2-0071-40,3-0001-1,3-0000-60', 'utf8').toString('base64');
+  const supDet = PluginCodec.detectCodePayload(legacySupB64, supportByKey, cidolByKey);
+  assert.equal(supDet.kind, 'support');
+  assert.equal(supDet.decoded.ok, true);
+  assert.equal(supDet.decoded.format, 'level');
+  assert.deepEqual(supDet.decoded.map, {
+    '3-0100': 1,
+    '2-0071': 2,
+    '3-0001': 0,
+    '3-0000': 4,
+  });
+  assert.equal(
+    Buffer.from(supDet.decoded.b64, 'base64').toString('utf8'),
+    '3-100-1,3-1-0,3-0-4,2-71-2'
+  );
+
+  // 2. 4位补零单张低等级 (3-0000-5) 识别为 level 并换算为 0 破
+  const lowLvB64 = Buffer.from('3-0000-5', 'utf8').toString('base64');
+  const lowLvDec = WebCodec.decodeSupportBox(lowLvB64, supportByKey);
+  assert.equal(lowLvDec.ok, true);
+  assert.equal(lowLvDec.format, 'level');
+  assert.equal(lowLvDec.map['3-0000'], 0);
+
+  // 3. 越界等级必须拒绝；普通突破码 3-0-5 依然拒绝
+  assert.equal(WebCodec.decodeSupportBox(Buffer.from('3-0000-65').toString('base64'), supportByKey).ok, false);
+  assert.equal(WebCodec.decodeSupportBox(Buffer.from('2-0000-55').toString('base64'), supportByKey).ok, false);
+  assert.equal(WebCodec.decodeSupportBox(Buffer.from('3-0-5').toString('base64'), supportByKey).ok, false);
+
+  // 4. P 卡旧版码（附带 -特训-潜能 后缀）应能识别并标准化
+  const legacyCidB64 = Buffer.from('amao-3-002-5-1,hski-1-000-6-0', 'utf8').toString('base64');
+  const cidDet = PluginCodec.detectCodePayload(legacyCidB64, supportByKey, cidolByKey);
+  assert.equal(cidDet.kind, 'cidol');
+  assert.equal(cidDet.decoded.ok, true);
+  assert.deepEqual(cidDet.decoded.set, { 'amao-3-002': true, 'hski-1-000': true });
+  assert.equal(
+    Buffer.from(cidDet.decoded.b64, 'base64').toString('utf8'),
+    'amao-3-002,hski-1-000'
+  );
+});
+
 test('summarizeBox 准确统计持有率与各属性/角色进度', () => {
   const summary = PluginCodec.summarizeBox({
     supportMap: { '3-0000': 4, '2-0000': 1 },

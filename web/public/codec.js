@@ -11,8 +11,8 @@
 
   const SHORT_CODE_RE = /^g\d{8}$/i;
   const BASE64_CHARS_RE = /^[A-Za-z0-9+/]+={0,2}$/;
-  const SUPPORT_ITEM_RE = /^([23])-(\d{1,4})-([0-4])$/;
-  const CIDOL_ITEM_RE = /^([a-z0-9]+)-([123])-(\d{1,3})$/;
+  const SUPPORT_ITEM_RE = /^([23])-(\d{1,4})-(\d{1,2})$/;
+  const CIDOL_ITEM_RE = /^([a-z0-9]+)-([123])-(\d{1,3})(?:-([0-7])-([0-4]))?$/;
 
   function hasOwn(obj, key) {
     return obj != null && Object.prototype.hasOwnProperty.call(obj, key);
@@ -61,10 +61,25 @@
     return base64EncodeAscii(raw);
   }
 
+  function levelToBreakLevel(rarity, level) {
+    if (rarity === '3') {
+      if (level <= 40) return 0;
+      if (level <= 45) return 1;
+      if (level <= 50) return 2;
+      if (level <= 55) return 3;
+      return 4;
+    }
+    if (level <= 30) return 0;
+    if (level <= 35) return 1;
+    if (level <= 40) return 2;
+    if (level <= 45) return 3;
+    return 4;
+  }
+
   function decodeSupportBox(b64, catalogByKey) {
     const clean = String(b64 || '').trim();
     if (!clean) {
-      return { ok: true, items: [], map: {}, b64: '' };
+      return { ok: true, items: [], map: {}, b64: '', format: 'break' };
     }
     let raw;
     try {
@@ -80,24 +95,50 @@
       return { ok: false, error: '支援卡代码内容为空' };
     }
 
-    const map = {};
-    const items = [];
-    const indexByKey = {};
+    const parsed = [];
     for (const token of tokens) {
       const m = SUPPORT_ITEM_RE.exec(token);
       if (!m) {
         return { ok: false, error: `支援卡条目格式无效: ${token}` };
       }
-      const rarity = m[1];
-      const number = m[2].padStart(4, '0');
-      const breakLevel = Number(m[3]);
-      const key = `${rarity}-${number}`;
+      parsed.push({
+        token,
+        rarity: m[1],
+        numRaw: m[2],
+        number: m[2].padStart(4, '0'),
+        rawVal: Number(m[3]),
+      });
+    }
+
+    // 兼容原版导出器按真实等级（如 3-0100-42）导出的旧版代码，同时保持 3-0-5 等非法突破值拦截
+    const isLevelMode =
+      parsed.some((p) => p.rawVal >= 10) ||
+      (parsed.every((p) => p.numRaw.length === 4) && parsed.some((p) => p.rawVal >= 5));
+
+    const map = {};
+    const items = [];
+    const indexByKey = {};
+    for (const p of parsed) {
+      let breakLevel;
+      if (isLevelMode) {
+        const maxLv = p.rarity === '3' ? 60 : 50;
+        if (p.rawVal < 0 || p.rawVal > maxLv) {
+          return { ok: false, error: `支援卡等级超出范围: ${p.token}` };
+        }
+        breakLevel = levelToBreakLevel(p.rarity, p.rawVal);
+      } else {
+        if (p.rawVal < 0 || p.rawVal > 4) {
+          return { ok: false, error: `支援卡条目格式无效: ${p.token}` };
+        }
+        breakLevel = p.rawVal;
+      }
+      const key = `${p.rarity}-${p.number}`;
       if (catalogByKey && !hasOwn(catalogByKey, key)) {
         return { ok: false, error: `目录中不存在支援卡: ${key}` };
       }
       if (!hasOwn(map, key)) {
         indexByKey[key] = items.length;
-        items.push({ key, rarity, number, breakLevel });
+        items.push({ key, rarity: p.rarity, number: p.number, breakLevel });
       } else {
         items[indexByKey[key]].breakLevel = breakLevel;
       }
@@ -108,6 +149,7 @@
       items,
       map,
       b64: encodeSupportBox(items),
+      format: isLevelMode ? 'level' : 'break',
     };
   }
 

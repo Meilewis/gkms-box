@@ -1073,6 +1073,7 @@ function apply(ctx, config) {
       let nextCidolCode = prev.cidolCode || '';
       let nextSupportCount = prev.supportCount || 0;
       let nextCidolCount = prev.cidolCount || 0;
+      let convertedFromLevel = false;
       const updatedParts = [];
 
       for (const tk of tokens) {
@@ -1094,6 +1095,7 @@ function apply(ctx, config) {
           if (payload.box) {
             const decSup = Codec.decodeSupportBox(payload.box, catalog.supportByKey);
             if (!decSup.ok) return textReply(`短码中的支援卡数据无效：${truncateText(decSup.error, 80)}`);
+            if (decSup.format === 'level') convertedFromLevel = true;
             nextSupportCode = decSup.b64;
             nextSupportCount = decSup.items.length;
             updatedParts.push(`支援卡 ${nextSupportCount} 张`);
@@ -1116,6 +1118,7 @@ function apply(ctx, config) {
 
         if (detected.kind === 'support') {
           nextShortCode = '';
+          if (detected.decoded.format === 'level') convertedFromLevel = true;
           nextSupportCode = detected.decoded.b64;
           nextSupportCount = detected.decoded.items.length;
           updatedParts.push(`支援卡 ${nextSupportCount} 张`);
@@ -1152,10 +1155,14 @@ function apply(ctx, config) {
         },
       ]);
 
+      const levelNote = convertedFromLevel
+        ? '\n（注：已自动从支援卡等级换算为 0~4 破，未升满级的高破卡可按需在网页端微调）'
+        : '';
       const bindSuccessText =
         `BOX 绑定成功（本次更新：${updatedParts.join('、')}）！\n` +
         `当前存档：支援卡 ${nextSupportCount} 张 · P卡与皮肤 ${nextCidolCount} 项\n` +
-        `发送「@${botName} 查box」即可生成你的汇总拼图。`;
+        `发送「@${botName} 查box」即可生成你的汇总拼图。` +
+        levelNote;
       return await sendAndAutoRecall(
         ctx,
         session,

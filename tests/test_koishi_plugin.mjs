@@ -1461,3 +1461,29 @@ test('buildSlangSheetHtml: SSR 独立分区在 SR 上方，且各自组内按实
     `SR 组内应全部在 SR 标题之后并按最新实装倒序: ${JSON.stringify({ srTitlePos, p2085, p2010 })}`
   );
 });
+
+test('绑定+<旧版代码> 端到端支持 Box导出器1.0 支援卡与 P 卡旧版代码', async () => {
+  const db = createMockDb();
+  const ctx = createMockCtx(db);
+
+  const legacySupB64 = Buffer.from('3-0100-42,2-0071-40', 'utf8').toString('base64');
+  const legacyCidB64 = Buffer.from('amao-3-002-5-1,hski-1-000-6-0', 'utf8').toString('base64');
+
+  const s1 = createSession(`绑定+${legacySupB64}`, { userId: 'legacy-u1' });
+  const r1 = await ctx.dispatch(s1);
+  assert.equal(r1.nextCalled, false);
+  assert.equal(s1.sent.length, 1);
+  assert.match(s1.sent[0].attrs.content, /BOX 绑定成功/);
+  assert.match(s1.sent[0].attrs.content, /支援卡 2 张/);
+  assert.match(s1.sent[0].attrs.content, /已自动从支援卡等级换算为 0~4 破/);
+
+  const s2 = createSession(`绑定+${legacyCidB64}`, { userId: 'legacy-u1' });
+  const r2 = await ctx.dispatch(s2);
+  assert.equal(r2.nextCalled, false);
+  assert.match(s2.sent[0].attrs.content, /P卡 2 项/);
+
+  const s3 = createSession(`绑定+${legacySupB64} ${legacyCidB64}`, { userId: 'legacy-u2' });
+  const r3 = await ctx.dispatch(s3);
+  assert.equal(r3.nextCalled, false);
+  assert.match(s3.sent[0].attrs.content, /支援卡 2 张、P卡 2 项/);
+});
