@@ -519,7 +519,20 @@ def listen_pipe_once(stop_event: threading.Event, on_payload, on_log) -> None:
 # ---------------------------------------------------------------------------
 
 
-def enable_dpi_awareness() -> None:
+def get_dpi_scale() -> float:
+    """获取当前系统 DPI 缩放比（96dpi=1.0）。"""
+    try:
+        dc = ctypes.windll.user32.GetDC(0)
+        dpi = ctypes.windll.gdi32.GetDeviceCaps(dc, 88)  # LOGPIXELSX
+        ctypes.windll.user32.ReleaseDC(0, dc)
+        if dpi > 0:
+            return max(1.0, min(2.5, float(dpi) / 96.0))
+    except Exception:
+        pass
+    return 1.0
+
+
+def enable_dpi_awareness() -> float:
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
@@ -527,6 +540,20 @@ def enable_dpi_awareness() -> None:
             ctypes.windll.user32.SetProcessDPIAware()
         except Exception:
             pass
+    return get_dpi_scale()
+
+
+def scaled_geometry(win: tk.Misc, base_w: int, base_h: int, scale: float) -> tuple[int, int]:
+    """按 DPI 缩放比例居中摆放窗口并避免超出屏幕边界。"""
+    win.update_idletasks()
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+    w = min(int(round(base_w * scale)), max(480, int(sw * 0.90)))
+    h = min(int(round(base_h * scale)), max(400, int(sh * 0.88)))
+    x = max(0, (sw - w) // 2)
+    y = max(0, (sh - h) // 2)
+    win.geometry(f"{w}x{h}+{x}+{y}")
+    return w, h
 
 
 def can_accept_disclaimer(remaining_seconds: int, agreed: bool) -> bool:
@@ -537,11 +564,11 @@ def can_accept_disclaimer(remaining_seconds: int, agreed: bool) -> bool:
 class DisclaimerDialog(tk.Toplevel):
     """启动时弹出的 5 秒强制使用须知与风险提示模态弹窗。"""
 
-    def __init__(self, master: tk.Misc) -> None:
+    def __init__(self, master: tk.Misc, scale: float = 1.0) -> None:
         super().__init__(master)
         self.title("使用须知与风险提示")
         self.configure(bg="#F7F6F4")
-        self.resizable(False, False)
+        self.resizable(True, True)
 
         ico = find_bundled_resource("icon.ico")
         if ico and ico.is_file():
@@ -550,13 +577,15 @@ class DisclaimerDialog(tk.Toplevel):
             except Exception:
                 pass
 
+        self.scale = scale
         self.accepted = False
         self._remaining = DISCLAIMER_WAIT_SECONDS
         self.agreed_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_reject)
-        self._center_on_screen(640, 470)
+        w, h = scaled_geometry(self, 680, 540, scale)
+        self.minsize(min(w, int(round(580 * scale))), min(h, int(round(460 * scale))))
 
         self.transient(master)
         self.grab_set()
@@ -564,18 +593,10 @@ class DisclaimerDialog(tk.Toplevel):
         self.focus_force()
         self.after(1000, self._tick)
 
-    def _center_on_screen(self, width: int, height: int) -> None:
-        self.update_idletasks()
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        x = max(0, (sw - width) // 2)
-        y = max(0, (sh - height) // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
-
     def _build_ui(self) -> None:
-        pad = 16
+        pad = int(round(16 * self.scale))
         hdr = tk.Frame(self, bg="#F7F6F4")
-        hdr.pack(fill="x", padx=pad, pady=(14, 6))
+        hdr.pack(side="top", fill="x", padx=pad, pady=(int(round(14 * self.scale)), 6))
         tk.Label(
             hdr,
             text="使用前请仔细阅读：使用须知与风险提示",
@@ -591,38 +612,9 @@ class DisclaimerDialog(tk.Toplevel):
             fg="#6E6A66",
         ).pack(anchor="w", pady=(2, 0))
 
-        body = scrolledtext.ScrolledText(
-            self,
-            font=("Microsoft YaHei UI", 9),
-            wrap="word",
-            bg="#FFFFFF",
-            fg="#1A1918",
-            bd=1,
-            relief="solid",
-            padx=10,
-            pady=8,
-            height=13,
-        )
-        body.pack(fill="both", expand=True, padx=pad, pady=6)
-        body.insert("1.0", DISCLAIMER_TEXT)
-        body.configure(state="disabled")
-
-        agree_row = tk.Frame(self, bg="#F7F6F4")
-        agree_row.pack(fill="x", padx=pad, pady=(4, 6))
-        tk.Checkbutton(
-            agree_row,
-            text="我已完整阅读并知悉上述使用风险与使用方法，自愿承担使用后果",
-            variable=self.agreed_var,
-            command=self._refresh_accept_btn,
-            font=("Microsoft YaHei UI", 9, "bold"),
-            bg="#F7F6F4",
-            activebackground="#F7F6F4",
-            fg="#1A1918",
-            cursor="hand2",
-        ).pack(anchor="w")
-
+        # 先自底向上锚定按钮与复选框，确保高 DPI 下永不被中部文本框挤出屏幕
         btn_row = tk.Frame(self, bg="#F7F6F4")
-        btn_row.pack(fill="x", padx=pad, pady=(2, 14))
+        btn_row.pack(side="bottom", fill="x", padx=pad, pady=(4, int(round(14 * self.scale))))
         tk.Button(
             btn_row,
             text="退出软件",
@@ -645,6 +637,39 @@ class DisclaimerDialog(tk.Toplevel):
             fg="#6E6A66",
         )
         self.btn_accept.pack(side="right")
+
+        agree_row = tk.Frame(self, bg="#F7F6F4")
+        agree_row.pack(side="bottom", fill="x", padx=pad, pady=(6, 4))
+        tk.Checkbutton(
+            agree_row,
+            text="我已完整阅读并知悉上述使用风险与使用方法，自愿承担使用后果",
+            variable=self.agreed_var,
+            command=self._refresh_accept_btn,
+            font=("Microsoft YaHei UI", 9, "bold"),
+            bg="#F7F6F4",
+            activebackground="#F7F6F4",
+            fg="#1A1918",
+            wraplength=int(round(610 * self.scale)),
+            justify="left",
+            cursor="hand2",
+        ).pack(anchor="w")
+
+        body = scrolledtext.ScrolledText(
+            self,
+            font=("Microsoft YaHei UI", 9),
+            wrap="char",
+            bg="#FFFFFF",
+            fg="#1A1918",
+            bd=1,
+            relief="solid",
+            padx=10,
+            pady=8,
+            height=10,
+        )
+        body.pack(side="top", fill="both", expand=True, padx=pad, pady=6)
+        body.insert("1.0", DISCLAIMER_TEXT)
+        body.see("1.0")
+        body.configure(state="disabled")
 
     def _tick(self) -> None:
         if not self.winfo_exists():
@@ -699,11 +724,12 @@ class DisclaimerDialog(tk.Toplevel):
 
 
 class ExporterApp(tk.Tk):
-    def __init__(self) -> None:
+    def __init__(self, scale: float = 1.0) -> None:
         super().__init__()
+        self.scale = scale
         self.title(APP_TITLE)
-        self.geometry("820x680")
-        self.minsize(720, 580)
+        w, h = scaled_geometry(self, 860, 720, scale)
+        self.minsize(min(w, int(round(720 * scale))), min(h, int(round(580 * scale))))
         self.configure(bg="#F7F6F4")
 
         ico = find_bundled_resource("icon.ico")
@@ -801,7 +827,7 @@ class ExporterApp(tk.Tk):
         tk.Button(sup_hdr, text="复制纯代码", command=lambda: self._copy_raw("support"), padx=8).pack(
             side="right", padx=6
         )
-        self.sup_text = tk.Text(sup_card, height=4, font=("Consolas", 9), wrap="char", bd=1, relief="sunken")
+        self.sup_text = tk.Text(sup_card, height=3, font=("Consolas", 9), wrap="char", bd=1, relief="sunken")
         self.sup_text.pack(fill="x", padx=12, pady=(0, 10))
 
         # P 卡结果区
@@ -818,7 +844,7 @@ class ExporterApp(tk.Tk):
         tk.Button(cid_hdr, text="复制纯代码", command=lambda: self._copy_raw("cidol"), padx=8).pack(
             side="right", padx=6
         )
-        self.cid_text = tk.Text(cid_card, height=4, font=("Consolas", 9), wrap="char", bd=1, relief="sunken")
+        self.cid_text = tk.Text(cid_card, height=3, font=("Consolas", 9), wrap="char", bd=1, relief="sunken")
         self.cid_text.pack(fill="x", padx=12, pady=(0, 10))
 
         # 日志区
@@ -827,7 +853,7 @@ class ExporterApp(tk.Tk):
         tk.Label(log_card, text="运行日志", font=("Microsoft YaHei UI", 9, "bold"), bg="#FFFFFF").pack(
             anchor="w", padx=12, pady=(8, 2)
         )
-        self.log_box = scrolledtext.ScrolledText(log_card, font=("Consolas", 9), state="disabled", height=8)
+        self.log_box = scrolledtext.ScrolledText(log_card, font=("Consolas", 9), state="disabled", height=6)
         self.log_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
     def log(self, msg: str) -> None:
@@ -984,10 +1010,10 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if "--selftest" in args:
         return run_selftest()
-    enable_dpi_awareness()
-    app = ExporterApp()
+    scale = enable_dpi_awareness()
+    app = ExporterApp(scale=scale)
     app.withdraw()
-    dlg = DisclaimerDialog(app)
+    dlg = DisclaimerDialog(app, scale=scale)
     app.wait_window(dlg)
     if not dlg.accepted:
         app.destroy()
