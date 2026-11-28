@@ -77,17 +77,15 @@ console.log('CROSS_CHECK_OK');
         for kw in ("风险", "代理 DLL", "使用方法", "停止并还原文件", "病毒佬", "本地离线", "禁止商用", "版权", "侵删"):
             self.assertIn(kw, exp.DISCLAIMER_TEXT)
 
-    def test_session_rel_paths_cover_all_game_env_files(self) -> None:
-        self.assertIn("winmm_real.dll", exp.SESSION_REL_PATHS)
-        game_env = Path(__file__).resolve().parent / "game_env"
-        if game_env.is_dir():
-            actual = {p.relative_to(game_env).as_posix() for p in game_env.rglob("*") if p.is_file()}
-            self.assertTrue(actual.issubset(set(exp.SESSION_REL_PATHS)), f"缺失依赖: {actual - set(exp.SESSION_REL_PATHS)}")
+    def test_single_proxy_dll_only(self) -> None:
+        self.assertEqual(exp.SESSION_REL_PATHS, ("xinput9_1_0.dll",))
+        self.assertNotIn("winmm.dll", exp.SESSION_REL_PATHS)
+        self.assertNotIn("version.dll", exp.SESSION_REL_PATHS)
 
     def test_plant_and_restore_roundtrip(self) -> None:
         game_env = Path(__file__).resolve().parent / "game_env"
-        if not game_env.is_dir():
-            self.skipTest("game_env 目录不存在")
+        if not (game_env / "xinput9_1_0.dll").is_file():
+            self.skipTest("game_env/xinput9_1_0.dll 不存在")
         tmp_dir = Path(tempfile.mkdtemp(prefix="gkms_plant_test_"))
         try:
             (tmp_dir / "gakumas.exe").write_bytes(b"GAME")
@@ -97,14 +95,15 @@ console.log('CROSS_CHECK_OK');
 
             notes = exp.plant_session_files(tmp_dir)
             self.assertGreater(len(notes), 0)
-            self.assertTrue((tmp_dir / "winmm.dll").is_file())
-            self.assertTrue((tmp_dir / "winmm_real.dll").is_file())
             self.assertTrue((tmp_dir / "xinput9_1_0.dll").is_file())
+            self.assertFalse((tmp_dir / "winmm.dll").exists())
+            self.assertFalse((tmp_dir / "winmm_real.dll").exists())
+            # 确认绝不修改用户原有的 version.dll 与汉化配置
+            self.assertEqual((tmp_dir / "version.dll").read_bytes(), b"ORIG_VERSION_DLL")
+            self.assertEqual((tmp_dir / "gakumas-local" / "config.json").read_text("utf-8"), '{"orig": true}')
 
             busy = exp.restore_session_files(tmp_dir)
             self.assertFalse(busy)
-            self.assertFalse((tmp_dir / "winmm.dll").exists())
-            self.assertFalse((tmp_dir / "winmm_real.dll").exists())
             self.assertFalse((tmp_dir / "xinput9_1_0.dll").exists())
             self.assertFalse((tmp_dir / exp.BACKUP_DIR_NAME).exists())
             self.assertEqual((tmp_dir / "version.dll").read_bytes(), b"ORIG_VERSION_DLL")

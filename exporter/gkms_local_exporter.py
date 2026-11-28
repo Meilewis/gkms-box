@@ -68,15 +68,8 @@ DMM_PLAYER_CANDIDATES = (
     Path(r"C:\Program Files (x86)\DMMGamePlayer\DMMGamePlayer.exe"),
 )
 
-SESSION_REL_PATHS = (
-    "xinput9_1_0.dll",
-    "winmm.dll",
-    "winmm_real.dll",
-    "version.dll",
-    "gakumas-local/config.json",
-    "gakumas-local/localizationConfig.json",
-    "gakumas-local/version.txt",
-)
+# 仅部署单一的 xinput9_1_0.dll 代理入口（不触碰游戏原有的 version.dll 与汉化插件，避免与 winmm.dll 双重 Hook 死锁）
+SESSION_REL_PATHS = ("xinput9_1_0.dll",)
 
 # ---------------------------------------------------------------------------
 # 核心编解码（与 gkms-box/koishi-plugin/codec.js 保持 100% 一致）
@@ -360,7 +353,12 @@ def plant_session_files(game_dir: Path) -> list[str]:
             shutil.copy2(src, dst)
 
     (game_dir / SENTINEL_NAME).write_text("session by GkmsBoxLocalExporter\n", encoding="utf-8")
-    (game_dir / WINMM_SENTINEL_NAME).write_text("session by GkmsBoxLocalExporter\n", encoding="utf-8")
+    old_winmm_marker = game_dir / WINMM_SENTINEL_NAME
+    if old_winmm_marker.exists():
+        try:
+            old_winmm_marker.unlink()
+        except OSError:
+            pass
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return notes
 
