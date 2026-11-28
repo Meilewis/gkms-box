@@ -7,6 +7,7 @@ const Codec = require('./codec');
 const renderer = require('./renderer');
 const HifPlanner = require('./hif-planner');
 const HifParamsCodec = require('./hif-params-codec');
+const HifXlsxImporter = require('./hif-xlsx-importer');
 
 const name = 'gkms-box';
 const inject = {
@@ -84,6 +85,21 @@ const Config = Schema.intersect([
       .default(30)
       .description('查box/晒box 拼图发出后自动撤回的秒数（0 表示不自动撤回；QQ 官方限制须在 120 秒内）'),
   }).description('消息自动撤回设置'),
+  Schema.object({
+    supportXlsxPath: Schema.string()
+      .default('support_cards.xlsx')
+      .description('NAS 本地映射的飞书支援卡表格路径（默认位于 <dataDir>/support_cards.xlsx，亦可填绝对路径或相对于 baseDir 的路径）'),
+    syncUpstreamCatalog: Schema.boolean()
+      .default(true)
+      .description('触发更新时是否顺带在线拉取上游最新 support.json / cidol.json 目录（失败自动降级使用本地目录）'),
+    upstreamProxyUrl: Schema.string()
+      .role('secret')
+      .default('')
+      .description('拉取上游 GitHub Raw 目录的可选 HTTP 代理地址（留空直连）'),
+    regenerateSlangOnUpdate: Schema.boolean()
+      .default(true)
+      .description('导入新表格后是否同时使用 Puppeteer 重绘并热更新 S 卡黑话对照表'),
+  }).description('自动热更新与表格导入'),
 ]);
 
 const usage = `
@@ -96,10 +112,11 @@ const usage = `
 - \`解绑box\`：清除已绑定的 BOX 存档
 - \`hif配卡 <P卡名/角色+流派> [hp1_参数码]\`：基于已绑定 BOX 计算最优 HIF 6 卡推荐并出图（如 \`hif配卡 香名江\`、\`hif配卡 莉波 感性\`）
 - \`黑话\` / \`黑话表\`：查看《学园偶像大师》S 卡昵称与黑话对照长图（群聊按群共享冷却）
+- **管理员热更新指令**：\`@机器人 更新支援卡表\`（默认读取 \`<dataDir>/support_cards.xlsx\`，自动同步上游卡池目录、内存验算并免重启热重载 HIF 公式引擎，按需使用 Puppeteer 重绘黑话对照表；非管理员触发严格静默忽略）
 
 ### 服务依赖与机制说明
-- **依赖服务**：必需 \`database\` + \`puppeteer\`；可选 \`adminAuth\`（管理员可绕过 \`查box\` / \`hif配卡\` 与 \`黑话\` 冷却）。
-- **黑话表热刷新**：优先加载 \`<dataDir>/data/s_card_slang_sheet.jpg\`，其次回退插件内置图；更新文件后下次触发自动热刷新。
+- **依赖服务**：必需 \`database\` + \`puppeteer\`；可选 \`adminAuth\`（管理员可绕过 \`查box\` / \`hif配卡\` 与 \`黑话\` 冷却，并解锁 \`更新支援卡表\`）。
+- **黑话表热刷新**：优先加载 \`<dataDir>/data/s_card_slang_sheet.jpg\`，其次回退插件内置图；更新文件或执行热更新后下次触发自动生效。
 `.trim();
 
 /**
@@ -364,6 +381,73 @@ function parseHifDeckCommand(plainText) {
 
 function parseSlangCommand(plainText) {
   return /^(?:黑话|黑话表)$/i.test(String(plainText || '').trim());
+}
+
+function parseUpdateCardsCommand(plainText) {
+  const clean = String(plainText || '')
+    .trim()
+    .replace(/[？?!！。.~～]+$/g, '')
+    .trim();
+  return /^(?:更新支援卡表|更新支援卡|更新卡池|更新hif卡表)$/i.test(clean);
+}
+
+function isInsideRoot(targetPath, rootPath) {
+  const resolvedRoot = path.resolve(rootPath);
+  const resolvedTarget = path.resolve(targetPath);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function resolveSafeXlsxPath(baseDir, dataDir, configuredPath) {
+  const raw = String(configuredPath ?? '').trim();
+  if (!raw || raw.includes('\0')) {
+    throw new Error('支援卡表格路径配置无效');
+  }
+  const safeDataDir = path.resolve(dataDir);
+  const safeBaseDir = path.resolve(baseDir || safeDataDir);
+
+  if (path.isAbsolute(raw)) {
+    const resolved = path.resolve(raw);
+    if (!isInsideRoot(resolved, safeDataDir) && !isInsideRoot(resolved, safeBaseDir)) {
+      throw new Error('拒绝访问越界路径：表格路径必须位于 dataDir 或 baseDir 目录之内');
+    }
+    return resolved;
+  }
+
+  const dataCandidate = path.resolve(safeDataDir, raw);
+  if (!isInsideRoot(dataCandidate, safeDataDir)) {
+    throw new Error('拒绝访问越界路径：相对表格路径不得跳出 dataDir');
+  }
+  if (fs.existsSync(dataCandidate)) {
+    return dataCandidate;
+  }
+  const baseCandidate = path.resolve(safeBaseDir, raw);
+  if (isInsideRoot(baseCandidate, safeBaseDir) && fs.existsSync(baseCandidate)) {
+    return baseCandidate;
+  }
+  return dataCandidate;
+}
+
+async function writeFileAtomicWithBackup(filePath, content) {
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (stat.isFile()) {
+      await fs.promises.copyFile(filePath, `${filePath}.bak-prev`);
+    }
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  try {
+    await fs.promises.writeFile(tmpPath, content);
+    await fs.promises.chmod(tmpPath, 0o644);
+    await fs.promises.rename(tmpPath, filePath);
+  } catch (err) {
+    await fs.promises.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
 }
 
 function resolveSlangCooldownKey(session) {
@@ -679,6 +763,7 @@ function apply(ctx, config) {
 
   const renderCooldowns = new Map();
   const slangCooldowns = new Map();
+  let isUpdatingCards = false;
 
   if (typeof ctx.setInterval === 'function') {
     ctx.setInterval(() => {
@@ -699,16 +784,210 @@ function apply(ctx, config) {
     const plainText = extractPlainText(session);
     if (!plainText) return next();
 
-    const isHelp = /^(?:绑定|box帮助|boxhelp)$/i.test(plainText);
-    const bindCmd = isHelp ? null : parseBindCommand(plainText);
-    const queryMatch = /^(?:查|晒)\s*box(?:\s+([\s\S]*))?$/i.exec(plainText);
-    const unbindMatch = /^解绑\s*box$/i.test(plainText);
-    const hifCmd = isHelp || bindCmd || queryMatch || unbindMatch ? null : parseHifDeckCommand(plainText);
+    const isUpdateCards = parseUpdateCardsCommand(plainText);
+    const isHelp = isUpdateCards ? false : /^(?:绑定|box帮助|boxhelp)$/i.test(plainText);
+    const bindCmd = isUpdateCards || isHelp ? null : parseBindCommand(plainText);
+    const queryMatch = isUpdateCards ? null : /^(?:查|晒)\s*box(?:\s+([\s\S]*))?$/i.exec(plainText);
+    const unbindMatch = isUpdateCards ? false : /^解绑\s*box$/i.test(plainText);
+    const hifCmd = isUpdateCards || isHelp || bindCmd || queryMatch || unbindMatch ? null : parseHifDeckCommand(plainText);
     const isSlang =
-      isHelp || bindCmd || queryMatch || unbindMatch || hifCmd ? false : parseSlangCommand(plainText);
+      isUpdateCards || isHelp || bindCmd || queryMatch || unbindMatch || hifCmd ? false : parseSlangCommand(plainText);
 
-    if (!isHelp && !bindCmd && !queryMatch && !unbindMatch && !hifCmd && !isSlang) {
+    if (!isUpdateCards && !isHelp && !bindCmd && !queryMatch && !unbindMatch && !hifCmd && !isSlang) {
       return next();
+    }
+
+    if (isUpdateCards) {
+      if (!(Boolean(session && session.isDirect) || isMentioningBot(session))) {
+        return next();
+      }
+      if (!isAdminSession(ctx, session)) {
+        logger.info('[admin-update] 非管理员触发更新支援卡表已静默忽略 user=%s', (session && session.userId) || 'unknown');
+        return undefined;
+      }
+      if (isUpdatingCards) {
+        return textReply('正在更新支援卡表，请稍后再试。');
+      }
+
+      isUpdatingCards = true;
+      const tStart = Date.now();
+      try {
+        let xlsxPath;
+        try {
+          xlsxPath = resolveSafeXlsxPath(
+            ctx.baseDir || process.cwd(),
+            dataDir,
+            config.supportXlsxPath === undefined ? 'support_cards.xlsx' : config.supportXlsxPath
+          );
+        } catch (err) {
+          return textReply(`更新支援卡表失败：${HifXlsxImporter.sanitizeErrorText(err && err.message ? err.message : err)}`);
+        }
+
+        let statXlsx;
+        try {
+          statXlsx = fs.statSync(xlsxPath);
+        } catch (_) {
+          return textReply(`未找到支援卡表格文件：${xlsxPath}\n请将飞书导出的 .xlsx 放入该路径后重试。`);
+        }
+        if (!statXlsx.isFile()) {
+          return textReply(`支援卡表格路径不是普通文件：${xlsxPath}`);
+        }
+        if (statXlsx.size > 80 * 1024 * 1024) {
+          return textReply(`支援卡表格文件过大（${statXlsx.size} bytes），超过 80 MB 上限。`);
+        }
+
+        // 流程 A：可选同步上游卡池目录（失败自动降级使用本地目录）
+        let catalogStatusText = '沿用本地目录（未开启在线同步）';
+        if (config.syncUpstreamCatalog !== false) {
+          try {
+            const up = await HifXlsxImporter.fetchUpstreamCatalog({
+              proxyUrl: config.upstreamProxyUrl || '',
+            });
+            if (
+              !up ||
+              !Array.isArray(up.support) ||
+              up.support.length < 100 ||
+              !Array.isArray(up.cidol) ||
+              up.cidol.length < 100
+            ) {
+              throw new Error('上游返回卡池数量异常');
+            }
+            const nextDataRoot = path.join(dataDir, 'data');
+            await writeFileAtomicWithBackup(
+              path.join(nextDataRoot, 'characters.json'),
+              JSON.stringify(up.characters || catalog.characters, null, 2)
+            );
+            await writeFileAtomicWithBackup(
+              path.join(nextDataRoot, 'support.json'),
+              JSON.stringify(up.support, null, 2)
+            );
+            await writeFileAtomicWithBackup(
+              path.join(nextDataRoot, 'cidol.json'),
+              JSON.stringify(up.cidol, null, 2)
+            );
+            if (up.meta) {
+              await writeFileAtomicWithBackup(
+                path.join(nextDataRoot, 'meta.json'),
+                JSON.stringify(up.meta, null, 2)
+              );
+            }
+            const nextSupportByKey = {};
+            for (const c of up.support) nextSupportByKey[c.key] = c;
+            const nextCidolByKey = {};
+            for (const s of up.cidol) nextCidolByKey[s.key] = s;
+            catalog = {
+              characters: up.characters || catalog.characters,
+              support: up.support,
+              supportByKey: nextSupportByKey,
+              cidol: up.cidol,
+              cidolByKey: nextCidolByKey,
+              meta: up.meta || catalog.meta,
+            };
+            catalogStatusText = `已在线同步上游目录（S卡 ${up.support.length} 张 / P卡 ${up.cidol.length} 项）`;
+          } catch (err) {
+            const safeMsg = HifXlsxImporter.sanitizeErrorText(err && err.message ? err.message : err);
+            logger.warn('[admin-update] 上游目录拉取失败，已降级沿用本地目录：%s', safeMsg);
+            catalogStatusText = `上游目录拉取失败，已降级沿用本地目录（${truncateText(safeMsg, 80)}）`;
+          }
+        }
+
+        // 流程 B：解析 Excel + 内存验算闸门 + 原子热重载 HIF
+        let extracted;
+        let extractedPayload;
+        let nextEngine;
+        const hifTargetPath = path.join(dataDir, 'data', 'hif_cards.json');
+        try {
+          extracted = HifXlsxImporter.extractHifCardsFromXlsx(xlsxPath, catalog.support);
+          extractedPayload = {
+            source: extracted.source,
+            cardCount: extracted.cardCount,
+            supportMatchCount: extracted.supportMatchCount,
+            selfCheckPassed: extracted.selfCheckPassed,
+            selfCheckTotal: extracted.selfCheckTotal,
+            cards: extracted.cards,
+          };
+          nextEngine = HifPlanner.buildHifEngineFromData(extractedPayload, hifTargetPath);
+        } catch (err) {
+          const safeMsg = HifXlsxImporter.sanitizeErrorText(err && err.message ? err.message : err);
+          logger.error('[admin-update] 表格解析或内存验算失败，未覆盖线上数据：%s', safeMsg);
+          return textReply(`更新支援卡表失败（原有数据未被修改）：${truncateText(safeMsg, 180)}`);
+        }
+
+        const prevKeys = new Set(
+          (hifEngine && Array.isArray(hifEngine.cards) ? hifEngine.cards : [])
+            .map((c) => c.supportKey)
+            .filter(Boolean)
+        );
+        const addedCards = extracted.cards.filter((c) => c.supportKey && !prevKeys.has(c.supportKey));
+
+        await writeFileAtomicWithBackup(hifTargetPath, JSON.stringify(extractedPayload, null, 2));
+        hifEngine = nextEngine;
+        HifPlanner.clearHifEngineCache();
+
+        // 流程 C：可选使用 Puppeteer 重绘黑话长图并热更新缓存
+        let slangStatusText = '未开启黑话表重绘';
+        if (config.regenerateSlangOnUpdate !== false) {
+          if (ctx.puppeteer && typeof ctx.puppeteer.page === 'function') {
+            try {
+              const renderedSlang = await renderer.renderSlangSheetImage({
+                getPage: () => ctx.puppeteer.page(),
+                dataDir,
+                cards: extracted.cards,
+                supportCatalog: catalog.support,
+              });
+              if (!renderedSlang || !Buffer.isBuffer(renderedSlang.buffer) || renderedSlang.buffer.length === 0 || renderedSlang.oversized) {
+                throw new Error('黑话图渲染结果为空或体积超限');
+              }
+              const slangOutPath = path.join(dataDir, 'data', 's_card_slang_sheet.jpg');
+              await writeFileAtomicWithBackup(slangOutPath, renderedSlang.buffer);
+              const statSlang = fs.statSync(slangOutPath);
+              slangSheet = {
+                filePath: slangOutPath,
+                mtimeMs: statSlang.mtimeMs,
+                size: statSlang.size,
+                buffer: renderedSlang.buffer,
+              };
+              slangStatusText = `已重绘并热刷新（${renderedSlang.buffer.length} bytes）`;
+            } catch (err) {
+              const safeMsg = HifXlsxImporter.sanitizeErrorText(err && err.message ? err.message : err);
+              logger.warn('[admin-update] 黑话表重绘失败（HIF 引擎已热重载）：%s', safeMsg);
+              slangStatusText = `重绘失败（已保留现有黑话图）：${truncateText(safeMsg, 80)}`;
+            }
+          } else {
+            slangStatusText = '跳过黑话表重绘（puppeteer 不可用）';
+          }
+        }
+
+        const newAliasText = addedCards.length
+          ? addedCards
+              .slice(0, 12)
+              .map((c) => `${c.supportKey}${c.alias ? `(${c.alias})` : ''}`)
+              .join('、') + (addedCards.length > 12 ? ` 等 ${addedCards.length} 张` : '')
+          : '无新增卡号（已全量重载现有公式）';
+
+        const elapsedMs = Date.now() - tStart;
+        logger.info(
+          '[admin-update] 热更新完成 cards=%d verified=%d/%d added=%d elapsed=%dms',
+          nextEngine.cardCount,
+          nextEngine.verifiedCount,
+          nextEngine.totalChecks,
+          addedCards.length,
+          elapsedMs
+        );
+
+        return textReply(
+          [
+            `支援卡表热更新完成（${elapsedMs}ms，已免重启即时生效）：`,
+            `• 卡池目录：${catalogStatusText}`,
+            `• 当前收录：支援卡 ${catalog.support.length} 张 · P卡与皮肤 ${catalog.cidol.length} 项`,
+            `• HIF 公式：共 ${nextEngine.cardCount} 张（线性校验 ${nextEngine.verifiedCount}/${nextEngine.totalChecks}，匹配 ${extracted.supportMatchCount}/${extracted.cardCount}）`,
+            `• 本次新增：${newAliasText}`,
+            `• 黑话长图：${slangStatusText}`,
+          ].join('\n')
+        );
+      } finally {
+        isUpdatingCards = false;
+      }
     }
 
     if (!canTriggerInSession(config, session)) {
@@ -1202,6 +1481,9 @@ module.exports = {
   parseBindCommand,
   parseHifDeckCommand,
   parseSlangCommand,
+  parseUpdateCardsCommand,
+  resolveSafeXlsxPath,
+  writeFileAtomicWithBackup,
   resolveSlangCooldownKey,
   formatSummaryText,
   fetchShortBindRecord,

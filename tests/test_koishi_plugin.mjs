@@ -111,6 +111,7 @@ Module._load = function (req, ...rest) {
 
 const Plugin = require(path.join(ROOT, 'koishi-plugin', 'index.js'));
 const Renderer = require(path.join(ROOT, 'koishi-plugin', 'renderer.js'));
+const HifXlsxImporter = require(path.join(ROOT, 'koishi-plugin', 'hif-xlsx-importer.js'));
 
 const characters = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'data', 'characters.json'), 'utf8'));
 
@@ -1241,9 +1242,182 @@ test('控制台配置导出：usage 与分组 Config 完整存在', () => {
   assert.ok(Plugin.usage.includes('查box'));
   assert.ok(Plugin.usage.includes('hif配卡'));
   assert.ok(Plugin.usage.includes('黑话'));
+  assert.ok(Plugin.usage.includes('更新支援卡表'));
   assert.ok(Plugin.usage.includes('database'));
   assert.ok(Plugin.usage.includes('puppeteer'));
   assert.ok(Plugin.usage.includes('adminAuth'));
   assert.ok(Plugin.usage.includes('s_card_slang_sheet.jpg'));
   assert.ok(Plugin.Config);
+});
+
+test('更新支援卡表: 权限隔离、路径越界拦截、端到端热重载与坏表/上游失败降级', async (t) => {
+  assert.equal(Plugin.parseUpdateCardsCommand('更新支援卡表！'), true);
+  assert.equal(Plugin.parseUpdateCardsCommand('更新hif卡表'), true);
+  assert.equal(Plugin.parseUpdateCardsCommand('今天更新支援卡表吗'), false);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gkms-hot-xlsx-'));
+  const dataSub = path.join(tmpDir, 'data');
+  fs.mkdirSync(dataSub, { recursive: true });
+  for (const fn of ['characters.json', 'support.json', 'cidol.json', 'meta.json']) {
+    fs.copyFileSync(path.join(DATA_DIR, 'data', fn), path.join(dataSub, fn));
+  }
+  fs.copyFileSync(path.join(ROOT, 'koishi-plugin', 'data', 'hif_cards.json'), path.join(dataSub, 'hif_cards.json'));
+  const initSlang = Buffer.from('OLD_SLANG_BYTES');
+  fs.writeFileSync(path.join(dataSub, 's_card_slang_sheet.jpg'), initSlang);
+
+  t.after(() => {
+    HifXlsxImporter.setUpstreamFetcher(null);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // 路径越界校验
+  assert.throws(() => Plugin.resolveSafeXlsxPath(tmpDir, tmpDir, '../outside.xlsx'), /越界/);
+  assert.throws(() => Plugin.resolveSafeXlsxPath(tmpDir, tmpDir, path.resolve(os.tmpdir(), 'other.xlsx')), /越界/);
+
+  const db = createMockDb();
+  const realB64 =
+    'My0xMjItNCwzLTExNC0xLDMtMTEwLTQsMy0xMDctNCwzLTk2LTEsMy05NC0xLDMtOTItMCwzLTkwLTAsMy04OS0xLDMtODMtMSwzLTgyLTEsMy04MS0xLDMtNzktMSwzLTc4LTEsMy03Ni0wLDMtNzAtMCwzLTY5LTQsMy02Ni00LDMtNjQtNCwzLTYyLTAsMy01OC0zLDMtNTctMCwzLTU1LTAsMy00Ni0wLDMtNDQtMCwzLTQyLTAsMy0zNy0wLDMtMzUtMCwzLTM0LTMsMy0zMS0wLDMtMjgtMSwzLTI3LTMsMy0yNS00LDMtMjQtMCwzLTIyLTEsMy0xOC0wLDMtMTctMCwzLTE2LTAsMy0xMy0wLDMtMTItMSwzLTExLTIsMy05LTQsMy03LTQsMy02LTAsMy01LTQsMy00LTAsMy0zLTAsMy0yLTQsMy0wLTAsMi04Mi0wLDItODEtMCwyLTcyLTQsMi02OC0wLDItNjEtNCwyLTQzLTQsMi03LTQsMi0zLTQsMi0xLTQ=';
+  await db.upsert('gkms_box_binding', [
+    {
+      userKey: 'qq:u100',
+      shortCode: '',
+      supportCode: realB64,
+      cidolCode: '',
+      supportCount: 58,
+      cidolCount: 0,
+      updatedAt: new Date(),
+    },
+  ]);
+
+  let fakeSlangBuf = Buffer.from('NEW_SLANG_JPEG_V2');
+  const ctx = createMockCtx(
+    db,
+    {
+      dataDir: tmpDir,
+      slangCooldownSeconds: 0,
+      cooldownSeconds: 0,
+      supportXlsxPath: 'support_cards.xlsx',
+      upstreamProxyUrl: 'http://proxyuser:SuperSecretPass@127.0.0.1:7890',
+    },
+    () =>
+      createFakePage({
+        boundingBox: { x: 0, y: 0, width: 1856, height: 1200 },
+        onScreenshot: () => fakeSlangBuf,
+      })
+  );
+  ctx.baseDir = tmpDir;
+  ctx.adminAuth = {
+    isAdmin: (s) => Boolean(s && s.userId === 'admin-u1'),
+  };
+
+  // 1. 非管理员静默忽略；群聊未 @bot 放行 next()
+  const nonAdminRes = await ctx.dispatch(createSession('更新支援卡表', { userId: 'normal-u2' }));
+  assert.equal(nonAdminRes.nextCalled, false);
+  assert.equal(nonAdminRes.ret, undefined);
+
+  const noAtRes = await ctx.dispatch(
+    createSession('更新支援卡表', {
+      userId: 'admin-u1',
+      content: '更新支援卡表',
+      elements: [{ type: 'text', attrs: { content: '更新支援卡表' }, children: [] }],
+      stripped: { appel: false, content: '更新支援卡表' },
+    })
+  );
+  assert.equal(noAtRes.nextCalled, true);
+
+  // 2. 管理员配置路径越界 & 文件缺失提示
+  const ctxBadPath = createMockCtx(db, { dataDir: tmpDir, supportXlsxPath: '../escape.xlsx' });
+  ctxBadPath.baseDir = tmpDir;
+  ctxBadPath.adminAuth = { isAdmin: () => true };
+  const badPathRes = await ctxBadPath.dispatch(createSession('更新支援卡表', { userId: 'admin-u1' }));
+  assert.equal(badPathRes.ret.type, 'text');
+  assert.match(badPathRes.ret.attrs.content, /越界/);
+
+  const missingRes = await ctx.dispatch(createSession('更新支援卡表', { userId: 'admin-u1' }));
+  assert.equal(missingRes.ret.type, 'text');
+  assert.ok(missingRes.ret.attrs.content.includes(path.join(tmpDir, 'support_cards.xlsx')));
+
+  // 3. 坏表/损坏 ZIP 写入后，拒绝覆盖线上 hif_cards.json
+  const xlsxTarget = path.join(tmpDir, 'support_cards.xlsx');
+  const prevHifBytes = fs.readFileSync(path.join(dataSub, 'hif_cards.json'));
+  fs.writeFileSync(xlsxTarget, Buffer.from('NOT_A_ZIP_CORRUPT_FILE'));
+  HifXlsxImporter.setUpstreamFetcher(async () => {
+    throw new Error('offline skip');
+  });
+  const corruptRes = await ctx.dispatch(createSession('更新支援卡表', { userId: 'admin-u1' }));
+  assert.equal(corruptRes.ret.type, 'text');
+  assert.match(corruptRes.ret.attrs.content, /原有数据未被修改/);
+  assert.deepEqual(fs.readFileSync(path.join(dataSub, 'hif_cards.json')), prevHifBytes);
+
+  // 4. 若本地存在真实 11.27 xlsx，测试完整端到端热更新与上游失败脱敏降级
+  const realXlsx = 'D:\\BaiduNetdiskDownload\\chromedownload\\支援卡-11.27新卡实装.xlsx';
+  if (fs.existsSync(realXlsx)) {
+    fs.copyFileSync(realXlsx, xlsxTarget);
+
+    // 4a. 上游拉取抛出带密码错误，验证脱敏且降级成功用本地 support.json 完成热更新
+    HifXlsxImporter.setUpstreamFetcher(async () => {
+      throw new Error('connect via http://proxyuser:SuperSecretPass@127.0.0.1:7890 failed');
+    });
+    const degradedRes = await ctx.dispatch(createSession('更新支援卡表', { userId: 'admin-u1' }));
+    assert.equal(degradedRes.ret.type, 'text');
+    const summaryText = degradedRes.ret.attrs.content;
+    assert.match(summaryText, /支援卡表热更新完成/);
+    assert.match(summaryText, /降级沿用本地目录/);
+    assert.equal(summaryText.includes('SuperSecretPass'), false, '返回消息不得泄露代理密码');
+    assert.equal(ctx.logs.warn.join('\n').includes('SuperSecretPass'), false, '日志不得泄露代理密码');
+    assert.ok(fs.existsSync(path.join(dataSub, 'hif_cards.json.bak-prev')));
+    assert.ok(fs.existsSync(path.join(dataSub, 's_card_slang_sheet.jpg.bak-prev')));
+
+    // 验证普通用户黑话指令立即拿到新版重绘黑话图，hif配卡使用热重载后引擎
+    const slangAfter = await ctx.dispatch(createSession('黑话', { userId: 'u100' }));
+    assert.equal(slangAfter.ret.type, 'image');
+    assert.equal(slangAfter.ret.attrs.data.toString('utf8'), 'NEW_SLANG_JPEG_V2');
+
+    const hifAfter = await ctx.dispatch(createSession('hif配卡 姬崎莉波 ガラクタロード', { userId: 'u100' }));
+    assert.equal(hifAfter.ret.type, 'image');
+
+    // 4b. 上游拉取成功 mock（模拟 100+ 合法目录项）并验证目录同步成功
+    const baseChars = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'data', 'characters.json'), 'utf8'));
+    const baseSup = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'data', 'support.json'), 'utf8'));
+    const baseCid = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'data', 'cidol.json'), 'utf8'));
+    const charYaml = Object.entries(baseChars)
+      .map(([id, name]) => `- id: ${id}\n  isPlayable: true\n  name: ${name}`)
+      .join('\n');
+    const supYaml = baseSup
+      .map((s) => {
+        const typeMap = { vo: 'SupportCardType_Vocal', da: 'SupportCardType_Dance', vi: 'SupportCardType_Visual', as: 'SupportCardType_Assist' };
+        const planMap = { Sense: 'ProducePlanType_Plan1', Logic: 'ProducePlanType_Plan2', Anomaly: 'ProducePlanType_Plan3', Common: 'ProducePlanType_Common' };
+        const rarMap = { '3': 'SupportCardRarity_Ssr', '2': 'SupportCardRarity_Sr' };
+        return `- id: ${s.id || `s_card-${s.key}`}\n  name: ${JSON.stringify(s.name)}\n  type: ${typeMap[s.attr]}\n  planType: ${planMap[s.plan]}\n  rarity: ${rarMap[s.rarity]}\n  order: ${s.order || 0}`;
+      })
+      .join('\n');
+    const cidYaml = baseCid
+      .filter((c) => !c.isSkinVariant)
+      .map((c) => {
+        const planMap = { Sense: 'ProducePlanType_Plan1', Logic: 'ProducePlanType_Plan2', Anomaly: 'ProducePlanType_Plan3' };
+        const rarMap = { '3': 'IdolCardRarity_Ssr', '2': 'IdolCardRarity_Sr', '1': 'IdolCardRarity_R' };
+        return `- id: ${c.idolCardId || `i_card-${c.key}`}\n  characterId: ${c.character}\n  name: ${JSON.stringify(c.name)}\n  planType: ${planMap[c.plan]}\n  rarity: ${rarMap[c.rarity]}`;
+      })
+      .join('\n');
+    const skinYaml = baseCid
+      .map(
+        (c) =>
+          `- id: ${c.id}\n  assetId: cidol-${c.key}\n  idolCardId: ${c.idolCardId || `i_card-${c.key}`}\n  name: ${JSON.stringify(c.isSkinVariant ? c.name : '')}`
+      )
+      .join('\n');
+
+    HifXlsxImporter.setUpstreamFetcher(async (filename) => {
+      if (filename === 'Character.yaml') return charYaml;
+      if (filename === 'SupportCard.yaml') return supYaml;
+      if (filename === 'IdolCard.yaml') return cidYaml;
+      if (filename === 'IdolCardSkin.yaml') return skinYaml;
+      return '';
+    });
+    fakeSlangBuf = Buffer.from('NEW_SLANG_JPEG_V3');
+    const fullOkRes = await ctx.dispatch(createSession('更新支援卡表', { userId: 'admin-u1' }));
+    assert.equal(fullOkRes.ret.type, 'text');
+    assert.match(fullOkRes.ret.attrs.content, /已在线同步上游目录/);
+    const slangV3 = await ctx.dispatch(createSession('黑话', { userId: 'u100' }));
+    assert.equal(slangV3.ret.attrs.data.toString('utf8'), 'NEW_SLANG_JPEG_V3');
+  }
 });

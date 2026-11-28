@@ -4,6 +4,10 @@ const fs = require('fs');
 const path = require('path');
 
 const MAX_JPEG_BYTES = 2850000;
+const SLANG_MAX_JPEG_BYTES = 6 * 1024 * 1024;
+const SLANG_HARD_LIMIT_BYTES = 12 * 1024 * 1024;
+const SLANG_CANVAS_WIDTH = 1856;
+const SLANG_TIMEOUT_MS = 45000;
 const RENDER_TIMEOUT_MS = 25000;
 const ASSET_WAIT_MS = 10000;
 const PAGE_CLOSE_WAIT_MS = 5000;
@@ -953,6 +957,281 @@ function buildHifDeckHtml({ ownerLabel, idol, characters, result, dataDir }) {
 </html>`;
 }
 
+function buildSlangSheetHtml({ cards, supportCatalog, dataDir }) {
+  const supByKey = {};
+  if (Array.isArray(supportCatalog)) {
+    for (const s of supportCatalog) {
+      if (s && s.key) supByKey[s.key] = s;
+    }
+  } else if (supportCatalog && typeof supportCatalog === 'object') {
+    for (const [k, v] of Object.entries(supportCatalog)) {
+      supByKey[k] = v;
+    }
+  }
+
+  const validCards = (Array.isArray(cards) ? cards : []).filter(
+    (c) => c && typeof c.alias === 'string' && c.alias.trim().length > 0
+  );
+
+  const releaseSortKey = (card) => {
+    const key = String(card.supportKey || '');
+    const sup = Object.prototype.hasOwnProperty.call(supByKey, key) ? supByKey[key] : null;
+    const order = sup && sup.order !== undefined && sup.order !== null ? Number(sup.order) : 9999999999;
+    const batch = Math.floor((order % 1000000000) / 10000);
+    const rarity = Number(card.rarity) || 0;
+    const num = Number(key.split('-')[1]) || 0;
+    return { batch, rarity, num };
+  };
+
+  const rankedCards = validCards.slice().sort((a, b) => {
+    const ka = releaseSortKey(a);
+    const kb = releaseSortKey(b);
+    return ka.batch - kb.batch || kb.rarity - ka.rarity || kb.num - ka.num;
+  });
+
+  const cols = 6;
+  const totalCards = rankedCards.length;
+  const totalSlots = Math.max(cols, Math.ceil(totalCards / cols) * cols);
+
+  const attrMeta = {
+    1: { code: 'Vo', accent: '#e11d48', bg: '#fff1f2', bd: '#fda4af', fg: '#be123c' },
+    2: { code: 'Da', accent: '#0284c7', bg: '#f0f9ff', bd: '#7dd3fc', fg: '#0369a1' },
+    3: { code: 'Vi', accent: '#d97706', bg: '#fffbeb', bd: '#fcd34d', fg: '#b45309' },
+  };
+  const planMeta = {
+    0: { name: '通用', cls: 'Common', bg: '#f1f5f9', bd: '#cbd5e1', fg: '#475569' },
+    1: { name: '感性', cls: 'Sense', bg: '#fff1f2', bd: '#fda4af', fg: '#be123c' },
+    2: { name: '理性', cls: 'Logic', bg: '#eff6ff', bd: '#93c5fd', fg: '#1d4ed8' },
+    3: { name: '非凡', cls: 'Anomaly', bg: '#faf5ff', bd: '#d8b4fe', fg: '#7e22ce' },
+  };
+
+  const cellsHtml = [];
+  for (let i = 0; i < totalSlots; i += 1) {
+    if (i >= totalCards) {
+      cellsHtml.push('<div class="slang-cell is-empty"></div>');
+      continue;
+    }
+
+    const card = rankedCards[i];
+    const supportKey = String(card.supportKey || '');
+    const keyParts = supportKey.split('-');
+    const supMeta = Object.prototype.hasOwnProperty.call(supByKey, supportKey) ? supByKey[supportKey] : null;
+    const rarityStr = String(card.rarity || (supMeta && supMeta.rarity) || keyParts[0] || '2');
+    const numberStr = String((supMeta && supMeta.number) || keyParts[1] || '0000').padStart(4, '0');
+    const am = attrMeta[card.attr] || attrMeta[1];
+    const pm = planMeta[card.plan] || planMeta[0];
+    const isSsr = rarityStr === '3';
+    const rarityLabel = isSsr ? 'SSR' : 'SR';
+    const rarityCls = isSsr ? 'r-ssr' : 'r-sr';
+
+    const imgCard = supMeta || { rarity: rarityStr, number: numberStr };
+    const imgUrl = resolveSupportImageDataUrl(dataDir, imgCard);
+    const aliasText = String(card.alias || '').trim();
+    const jpText = String(card.jpName || card.rawName || (supMeta && supMeta.name) || '').trim();
+
+    const mediaHtml = imgUrl
+      ? `<img class="slang-img" src="${imgUrl}" alt="">`
+      : `<div class="slang-fallback plan-${escapeHtml(pm.cls)}">
+           <div class="slang-fb-title">${escapeHtml(aliasText || jpText)}</div>
+           <div class="slang-fb-sub">${escapeHtml(pm.name)} · #${escapeHtml(numberStr)}</div>
+         </div>`;
+
+    cellsHtml.push(`
+      <div class="slang-cell" style="--accent:${am.accent}">
+        <div class="slang-media">
+          ${mediaHtml}
+        </div>
+        <div class="slang-meta">
+          <div class="slang-badges">
+            <span class="slang-badge ${rarityCls}">${rarityLabel}</span>
+            <span class="slang-badge" style="background:${am.bg};border-color:${am.bd};color:${am.fg}">${am.code}</span>
+            <span class="slang-badge" style="background:${pm.bg};border-color:${pm.bd};color:${pm.fg}">${escapeHtml(pm.name)}</span>
+            ${card.isSp === 1 ? '<span class="slang-badge is-sp">SP</span>' : ''}
+          </div>
+          <span class="slang-key">${escapeHtml(supportKey)}</span>
+        </div>
+        <div class="slang-alias">${escapeHtml(aliasText)}</div>
+        <div class="slang-jp">${escapeHtml(jpText)}</div>
+      </div>
+    `);
+  }
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: ${SLANG_CANVAS_WIDTH}px;
+    background: #ffffff;
+    color: #0f172a;
+    font-family: "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans CJK JP", "WenQuanYi Micro Hei", sans-serif;
+  }
+  #canvas-root {
+    width: ${SLANG_CANVAS_WIDTH}px;
+    padding: 18px 28px 24px;
+    background: #ffffff;
+  }
+  .slang-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .slang-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .slang-title-bar {
+    width: 6px;
+    height: 36px;
+    background: #ea580c;
+  }
+  .slang-title {
+    font-size: 30px;
+    font-weight: 800;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+  .slang-count {
+    font-size: 15px;
+    color: #64748b;
+    font-weight: 500;
+  }
+  .slang-notice {
+    background: #f8fafc;
+    border: 1px solid #d4dbe4;
+    border-left: 4px solid #ea580c;
+    padding: 11px 14px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    line-height: 1.75;
+    color: #334155;
+  }
+  .slang-notice-row b { color: #0f172a; }
+  .slang-notice-row.warn b { color: #b45309; }
+  .slang-notice-row.warn span { color: #475569; }
+  .slang-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 300px);
+    border-top: 1px solid #d4dbe4;
+    border-left: 1px solid #d4dbe4;
+    width: 1800px;
+  }
+  .slang-cell {
+    width: 300px;
+    min-height: 268px;
+    padding: 9px 8px 8px;
+    background: #ffffff;
+    border-right: 1px solid #d4dbe4;
+    border-bottom: 1px solid #d4dbe4;
+    border-top: 2px solid var(--accent, #d4dbe4);
+    display: flex;
+    flex-direction: column;
+  }
+  .slang-cell.is-empty {
+    background: #fafbfd;
+    border-top: none;
+  }
+  .slang-media {
+    width: 284px;
+    height: 159px;
+    border: 1px solid #e2e8f0;
+    overflow: hidden;
+    background: #0f172a;
+    flex-shrink: 0;
+  }
+  .slang-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .slang-fallback {
+    width: 100%;
+    height: 100%;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  .plan-Sense { background: linear-gradient(135deg, #2f1223 0%, #14172c 100%); }
+  .plan-Logic { background: linear-gradient(135deg, #0d2842 0%, #111b33 100%); }
+  .plan-Anomaly { background: linear-gradient(135deg, #291342 0%, #171433 100%); }
+  .plan-Common { background: linear-gradient(135deg, #0c2e28 0%, #121c31 100%); }
+  .slang-fb-title { font-size: 14px; font-weight: 800; color: #f8fafc; line-height: 1.3; word-break: break-word; }
+  .slang-fb-sub { margin-top: 4px; font-size: 11px; color: #94a3b8; font-weight: 700; }
+  .slang-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 6px;
+    min-height: 20px;
+  }
+  .slang-badges {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+  .slang-badge {
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 3px 5px;
+    border: 1px solid transparent;
+  }
+  .r-ssr { background: #fef3c7; border-color: #f59e0b; color: #b45309; }
+  .r-sr { background: #f1f5f9; border-color: #cbd5e1; color: #475569; }
+  .slang-badge.is-sp { background: #ea580c; border-color: #ea580c; color: #ffffff; }
+  .slang-key {
+    font-size: 12px;
+    color: #788496;
+    font-weight: 500;
+  }
+  .slang-alias {
+    margin-top: 6px;
+    font-size: 17px;
+    font-weight: 800;
+    color: #0f172a;
+    line-height: 1.25;
+    word-break: break-word;
+  }
+  .slang-jp {
+    margin-top: 4px;
+    font-size: 13px;
+    color: #64748b;
+    line-height: 1.3;
+    word-break: break-word;
+  }
+</style>
+</head>
+<body>
+  <div id="canvas-root">
+    <header class="slang-header">
+      <div class="slang-title-wrap">
+        <span class="slang-title-bar"></span>
+        <h1 class="slang-title">学园偶像大师 · S 卡黑话对照表</h1>
+      </div>
+      <div class="slang-count">共收录 ${totalCards} 张 S 卡（按实装批次倒序）</div>
+    </header>
+    <section class="slang-notice">
+      <div class="slang-notice-row"><b>黑话来源：</b><span>support.json / 飞书支援卡数据表（原《学园偶像大师》支援卡算分表）及后续新实装卡补充</span></div>
+      <div class="slang-notice-row"><b>卡面版权：</b><span>卡池目录与卡面同步自 vertesan/gakumasu-diff；游戏及素材版权归 © Bandai Namco Entertainment Inc. / QualiArts, Inc. 所有</span></div>
+      <div class="slang-notice-row warn"><b>免责声明：</b><span>由同好工具 gkms-box（gkms.134491.xyz）整理排版，仅供非营利交流速查，俗称随社区习惯可能存在差异，与官方无关，如有侵权请联系删除</span></div>
+    </section>
+    <main class="slang-grid">
+      ${cellsHtml.join('')}
+    </main>
+  </div>
+</body>
+</html>`;
+}
+
 function round2FloorStr(n) {
   return String(Math.round(Number(n || 0) * 100) / 100);
 }
@@ -1016,12 +1295,12 @@ async function measureCanvasRoot(page) {
   };
 }
 
-async function shootWithQualities(page, clip, scale, qualities) {
+async function shootWithQualities(page, clip, scale, qualities, maxJpegBytes = MAX_JPEG_BYTES) {
   let lastBuf = null;
   for (const q of qualities) {
     const buf = await page.screenshot({ clip, type: 'jpeg', quality: q });
     lastBuf = buf;
-    if (buf.length < MAX_JPEG_BYTES) {
+    if (buf.length < maxJpegBytes) {
       return { buffer: buf, quality: q, scale, width: clip.width, height: clip.height, oversized: false };
     }
   }
@@ -1041,7 +1320,15 @@ async function shootWithQualities(page, clip, scale, qualities) {
 async function captureOnPage(
   page,
   html,
-  { assetWaitMs = ASSET_WAIT_MS, contentTimeoutMs = RENDER_TIMEOUT_MS, viewportWidth = 1400 } = {}
+  {
+    assetWaitMs = ASSET_WAIT_MS,
+    contentTimeoutMs = RENDER_TIMEOUT_MS,
+    viewportWidth = 1400,
+    maxScale = MAX_SCALE,
+    maxOutputHeightPx = MAX_OUTPUT_HEIGHT_PX,
+    maxJpegBytes = MAX_JPEG_BYTES,
+    qualities = [86, 76, 66, 56],
+  } = {}
 ) {
   await lockDownRequests(page);
   await page.setViewport({ width: viewportWidth, height: 900, deviceScaleFactor: 1 });
@@ -1067,14 +1354,14 @@ async function captureOnPage(
   }, assetWaitMs);
 
   const baseClip = await measureCanvasRoot(page);
-  const scale = floor2(Math.min(MAX_SCALE, MAX_OUTPUT_HEIGHT_PX / baseClip.height));
+  const scale = floor2(Math.min(maxScale, maxOutputHeightPx / baseClip.height));
   if (!(scale >= MIN_SCALE)) {
     throw new Error('拼图过长');
   }
 
   await page.setViewport({ width: viewportWidth, height: 900, deviceScaleFactor: scale });
   const clip = await measureCanvasRoot(page);
-  const firstPass = await shootWithQualities(page, clip, scale, [86, 76, 66, 56]);
+  const firstPass = await shootWithQualities(page, clip, scale, qualities, maxJpegBytes);
   if (!firstPass.oversized) return firstPass;
 
   // 体积仍超限：降低缩放倍率再按更低质量重试
@@ -1082,10 +1369,20 @@ async function captureOnPage(
   if (fallbackScale >= scale) return firstPass;
   await page.setViewport({ width: viewportWidth, height: 900, deviceScaleFactor: fallbackScale });
   const clip2 = await measureCanvasRoot(page);
-  return shootWithQualities(page, clip2, fallbackScale, [74, 62, 52]);
+  return shootWithQualities(page, clip2, fallbackScale, [74, 62, 52], maxJpegBytes);
 }
 
-async function renderHtmlWithLock({ getPage, html, viewportWidth = 1400, timeoutMs = RENDER_TIMEOUT_MS, label = 'BOX 拼图' }) {
+async function renderHtmlWithLock({
+  getPage,
+  html,
+  viewportWidth = 1400,
+  timeoutMs = RENDER_TIMEOUT_MS,
+  label = 'BOX 拼图',
+  maxScale = MAX_SCALE,
+  maxOutputHeightPx = MAX_OUTPUT_HEIGHT_PX,
+  maxJpegBytes = MAX_JPEG_BYTES,
+  qualities = [86, 76, 66, 56],
+}) {
   return withRenderLock(async () => {
     let page = null;
     let closePromise = null;
@@ -1107,7 +1404,14 @@ async function renderHtmlWithLock({ getPage, html, viewportWidth = 1400, timeout
         await closePageOnce();
         throw new Error(`${label}渲染超时（页面获取过慢）`);
       }
-      return captureOnPage(acquired, html, { contentTimeoutMs: timeoutMs, viewportWidth });
+      return captureOnPage(acquired, html, {
+        contentTimeoutMs: timeoutMs,
+        viewportWidth,
+        maxScale,
+        maxOutputHeightPx,
+        maxJpegBytes,
+        qualities,
+      });
     })();
     work.catch(() => {});
 
@@ -1138,14 +1442,34 @@ async function renderHifDeckImage({ getPage, dataDir, htmlPayload, timeoutMs = R
   return renderHtmlWithLock({ getPage, html, viewportWidth: HIF_CANVAS_WIDTH, timeoutMs, label: 'HIF 配卡拼图' });
 }
 
+async function renderSlangSheetImage({ getPage, dataDir, cards, supportCatalog, timeoutMs = SLANG_TIMEOUT_MS }) {
+  const html = buildSlangSheetHtml({ cards, supportCatalog, dataDir });
+  const rendered = await renderHtmlWithLock({
+    getPage,
+    html,
+    viewportWidth: SLANG_CANVAS_WIDTH,
+    timeoutMs,
+    label: '黑话表长图',
+    maxScale: 1,
+    maxOutputHeightPx: 16000,
+    maxJpegBytes: SLANG_MAX_JPEG_BYTES,
+  });
+  if (rendered && rendered.buffer && rendered.buffer.length > SLANG_HARD_LIMIT_BYTES) {
+    return { ...rendered, oversized: true };
+  }
+  return rendered;
+}
+
 module.exports = {
   MAX_JPEG_BYTES,
   RENDER_TIMEOUT_MS,
   escapeHtml,
   buildRenderHtml,
   buildHifDeckHtml,
+  buildSlangSheetHtml,
   renderBoxImage,
   renderHifDeckImage,
+  renderSlangSheetImage,
   getPendingRenderCount,
   fileToDataUrl,
   clearDataUrlCache,

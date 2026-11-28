@@ -497,16 +497,12 @@
     throw new Error(`缺少 HIF 支援卡公式文件 hif_cards.json（已查找：${candidates.join(', ')}）`);
   }
 
-  function loadHifEngine(dataDir, explicitPath) {
-    const filePath = resolveCardsDataPath(dataDir, explicitPath);
-    const stat = fs.statSync(filePath);
-    const cached = engineCache.get(filePath);
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return cached.engine;
+  function buildHifEngineFromData(rawData, sourcePath = '<memory>') {
+    if (!rawData || !Array.isArray(rawData.cards) || rawData.cards.length === 0) {
+      throw new Error(`HIF 公式数据无效（${sourcePath}）：缺少 cards 数组或为空`);
     }
 
-    const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    const cards = Array.isArray(rawData && rawData.cards) ? rawData.cards : [];
+    const cards = rawData.cards;
     const cardsById = new Map();
     const compiled = new Map();
     const pctTable = new Map();
@@ -520,20 +516,66 @@
     rvZero.B13 = 0;
     const rv1000 = { ...rvZero, B11: 1000, B12: 1000, B13: 1000 };
 
+    // 基于 BASE_HIF_ACTIONS 构建默认路线变量，并用 Proxy 在健康检查时拦截未声明变量
+    const baseRvRaw = { ...BASE_HIF_ACTIONS };
+    for (let i = 11; i <= 22; i += 1) {
+      baseRvRaw[`B${i}`] = 0;
+    }
+    baseRvRaw.B14 = 8;
+    baseRvRaw.B15 = 8;
+    baseRvRaw.B30 = 6;
+    baseRvRaw.B49 = 4;
+    const healthRv = new Proxy(baseRvRaw, {
+      get(target, prop) {
+        if (typeof prop === 'string' && !Object.prototype.hasOwnProperty.call(target, prop)) {
+          throw new Error(`引用了未定义路线变量 R['${prop}']`);
+        }
+        return target[prop];
+      },
+    });
+
     let verified = 0;
     let total = 0;
     const pctRegex = /([0-9.]+)\s*\*\s*R\['B1[123]'\]/;
 
     for (const c of cards) {
+      if (!c || typeof c !== 'object' || !c.exprs) {
+        throw new Error(`HIF 卡片条目缺少 exprs 字段: ${c && (c.rawName || c.supportKey || c.id)}`);
+      }
       cardsById.set(c.id, c);
       const compCard = { noItem: [], withItem: [] };
       const pctCard = [];
 
       for (const mode of ['noItem', 'withItem']) {
+        const modeExprs = c.exprs[mode];
+        if (!modeExprs || typeof modeExprs !== 'object') {
+          throw new Error(`HIF 卡片缺少 ${mode} 公式表: ${c.rawName || c.supportKey || c.id}`);
+        }
         for (let lb = 0; lb < 5; lb += 1) {
-          const exprs = c.exprs[mode][String(lb)];
+          const exprs = modeExprs[String(lb)];
+          if (!Array.isArray(exprs) || exprs.length < 3) {
+            throw new Error(
+              `HIF 卡片公式缺失 (${c.rawName || c.supportKey || c.id} mode=${mode} lb=${lb})`
+            );
+          }
           const fns = exprs.map((expr) => compileCardExpr(expr));
           compCard[mode][lb] = fns;
+
+          for (let si = 0; si < 3; si += 1) {
+            let healthVal;
+            try {
+              healthVal = fns[si](healthRv, false);
+            } catch (err) {
+              throw new Error(
+                `HIF 卡片求值异常 (${c.rawName || c.supportKey || c.id} mode=${mode} lb=${lb} slot=${si + 1}): ${err.message}`
+              );
+            }
+            if (typeof healthVal !== 'number' || !Number.isFinite(healthVal)) {
+              throw new Error(
+                `HIF 卡片默认求值非有限数字 (${c.rawName || c.supportKey || c.id} mode=${mode} lb=${lb} slot=${si + 1}): ${healthVal}`
+              );
+            }
+          }
 
           if (mode === 'noItem') {
             const pcts = [];
@@ -563,8 +605,9 @@
       pctTable.set(c.id, pctCard);
     }
 
-    const engine = {
-      sourcePath: filePath,
+    return {
+      sourcePath,
+      source: rawData.source || '',
       cardCount: cards.length,
       verifiedCount: verified,
       totalChecks: total,
@@ -573,8 +616,24 @@
       compiled,
       pctTable,
     };
+  }
+
+  function loadHifEngine(dataDir, explicitPath) {
+    const filePath = resolveCardsDataPath(dataDir, explicitPath);
+    const stat = fs.statSync(filePath);
+    const cached = engineCache.get(filePath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.engine;
+    }
+
+    const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const engine = buildHifEngineFromData(rawData, filePath);
     engineCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, engine });
     return engine;
+  }
+
+  function clearHifEngineCache() {
+    engineCache.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -1559,7 +1618,9 @@
     HIF_GLOBAL_PCT_BONUS,
     HIF_GLOBAL_FLAT_BONUS,
     compileCardExpr,
+    buildHifEngineFromData,
     loadHifEngine,
+    clearHifEngineCache,
     getIdolRealStats,
     idolAttrOrder,
     calcHifRating,
