@@ -27,6 +27,17 @@ from tkinter import filedialog, messagebox, scrolledtext
 
 
 APP_TITLE = "学马仕 BOX 本地导出器（gkms-box 专用纯离线版）"
+DISCLAIMER_WAIT_SECONDS = 5
+DISCLAIMER_TEXT = """【一、使用风险与免责声明】
+1. 本工具为 100% 纯本地离线软件，不连接任何第三方网络服务器，也不会上传你的游戏账号或持有数据。
+2. 导出过程需要结束当前游戏进程，并在游戏目录临时放置代理 DLL（xinput9_1_0.dll 等）以在本地只读读取持有列表（不修改游戏内存与存档）。尽管不篡改游戏数据，仍属于非官方第三方插件加载行为，存在潜在违反游戏服务条款或触发检测的风险。
+3. 使用本软件产生的一切后果与风险均由使用者本人自行承担。导出前会自动将游戏目录原有文件备份至 `.gkms_box_backup`，使用完毕后请务必还原，勿长期保留临时文件进入游戏。
+
+【二、使用方法】
+1. 建议右键「以管理员身份运行」本工具，并确认上方「游戏目录」指向包含 gakumas.exe 的路径。
+2. 点击「开始导出（重启游戏并抓取）」，等待 DMM Game Player 拉起游戏并登录进入游戏主界面，软件会自动接收持有数据并生成适配 gkms-box / Koishi 机器人的绑定码。
+3. 点击支援卡与 P 偶像栏右侧的「复制绑定指令 (绑定 ...)」，直接粘贴发送给 QQ 机器人即可完成绑定。
+4. 导出完成后请先退出游戏，再点击「停止并还原文件」（或直接关闭本软件）以恢复游戏目录原状。"""
 PIPE_NAME = r"\\.\pipe\gkms_box_export"
 BACKUP_DIR_NAME = ".gkms_box_backup"
 MANIFEST_NAME = "manifest.json"
@@ -518,6 +529,175 @@ def enable_dpi_awareness() -> None:
             pass
 
 
+def can_accept_disclaimer(remaining_seconds: int, agreed: bool) -> bool:
+    """仅当 5 秒倒计时归零且用户已勾选同意时才允许继续使用。"""
+    return int(remaining_seconds) <= 0 and bool(agreed)
+
+
+class DisclaimerDialog(tk.Toplevel):
+    """启动时弹出的 5 秒强制使用须知与风险提示模态弹窗。"""
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master)
+        self.title("使用须知与风险提示")
+        self.configure(bg="#F7F6F4")
+        self.resizable(False, False)
+
+        ico = find_bundled_resource("icon.ico")
+        if ico and ico.is_file():
+            try:
+                self.iconbitmap(str(ico))
+            except Exception:
+                pass
+
+        self.accepted = False
+        self._remaining = DISCLAIMER_WAIT_SECONDS
+        self.agreed_var = tk.BooleanVar(value=False)
+
+        self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_reject)
+        self._center_on_screen(640, 470)
+
+        self.transient(master)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+        self.after(1000, self._tick)
+
+    def _center_on_screen(self, width: int, height: int) -> None:
+        self.update_idletasks()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = max(0, (sw - width) // 2)
+        y = max(0, (sh - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _build_ui(self) -> None:
+        pad = 16
+        hdr = tk.Frame(self, bg="#F7F6F4")
+        hdr.pack(fill="x", padx=pad, pady=(14, 6))
+        tk.Label(
+            hdr,
+            text="使用前请仔细阅读：使用须知与风险提示",
+            font=("Microsoft YaHei UI", 12, "bold"),
+            bg="#F7F6F4",
+            fg="#C0392B",
+        ).pack(anchor="w")
+        tk.Label(
+            hdr,
+            text="请阅读下方风险说明与操作步骤，等待倒计时结束并勾选同意后方可继续。",
+            font=("Microsoft YaHei UI", 9),
+            bg="#F7F6F4",
+            fg="#6E6A66",
+        ).pack(anchor="w", pady=(2, 0))
+
+        body = scrolledtext.ScrolledText(
+            self,
+            font=("Microsoft YaHei UI", 9),
+            wrap="word",
+            bg="#FFFFFF",
+            fg="#1A1918",
+            bd=1,
+            relief="solid",
+            padx=10,
+            pady=8,
+            height=13,
+        )
+        body.pack(fill="both", expand=True, padx=pad, pady=6)
+        body.insert("1.0", DISCLAIMER_TEXT)
+        body.configure(state="disabled")
+
+        agree_row = tk.Frame(self, bg="#F7F6F4")
+        agree_row.pack(fill="x", padx=pad, pady=(4, 6))
+        tk.Checkbutton(
+            agree_row,
+            text="我已完整阅读并知悉上述使用风险与使用方法，自愿承担使用后果",
+            variable=self.agreed_var,
+            command=self._refresh_accept_btn,
+            font=("Microsoft YaHei UI", 9, "bold"),
+            bg="#F7F6F4",
+            activebackground="#F7F6F4",
+            fg="#1A1918",
+            cursor="hand2",
+        ).pack(anchor="w")
+
+        btn_row = tk.Frame(self, bg="#F7F6F4")
+        btn_row.pack(fill="x", padx=pad, pady=(2, 14))
+        tk.Button(
+            btn_row,
+            text="退出软件",
+            command=self._on_reject,
+            font=("Microsoft YaHei UI", 9),
+            padx=14,
+            pady=5,
+        ).pack(side="left")
+
+        self.btn_accept = tk.Button(
+            btn_row,
+            text=f"同意并继续 ({self._remaining}s)",
+            command=self._on_accept,
+            font=("Microsoft YaHei UI", 9, "bold"),
+            padx=16,
+            pady=5,
+            relief="flat",
+            state="disabled",
+            bg="#D9D5CF",
+            fg="#6E6A66",
+        )
+        self.btn_accept.pack(side="right")
+
+    def _tick(self) -> None:
+        if not self.winfo_exists():
+            return
+        if self._remaining > 0:
+            self._remaining -= 1
+            self._refresh_accept_btn()
+            if self._remaining > 0:
+                self.after(1000, self._tick)
+
+    def _refresh_accept_btn(self) -> None:
+        if self._remaining > 0:
+            self.btn_accept.configure(
+                text=f"同意并继续 ({self._remaining}s)",
+                state="disabled",
+                bg="#D9D5CF",
+                fg="#6E6A66",
+                cursor="arrow",
+            )
+            return
+        if can_accept_disclaimer(self._remaining, self.agreed_var.get()):
+            self.btn_accept.configure(
+                text="同意并继续",
+                state="normal",
+                bg="#C44D63",
+                fg="#FFFFFF",
+                cursor="hand2",
+            )
+        else:
+            self.btn_accept.configure(
+                text="同意并继续",
+                state="disabled",
+                bg="#D9D5CF",
+                fg="#6E6A66",
+                cursor="arrow",
+            )
+
+    def _on_accept(self) -> None:
+        if not can_accept_disclaimer(self._remaining, self.agreed_var.get()):
+            return
+        self.accepted = True
+        self.grab_release()
+        self.destroy()
+
+    def _on_reject(self) -> None:
+        self.accepted = False
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.destroy()
+
+
 class ExporterApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -806,6 +986,15 @@ def main(argv: list[str] | None = None) -> int:
         return run_selftest()
     enable_dpi_awareness()
     app = ExporterApp()
+    app.withdraw()
+    dlg = DisclaimerDialog(app)
+    app.wait_window(dlg)
+    if not dlg.accepted:
+        app.destroy()
+        return 0
+    app.deiconify()
+    app.lift()
+    app.focus_force()
     app.mainloop()
     return 0
 

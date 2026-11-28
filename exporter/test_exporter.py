@@ -66,6 +66,15 @@ console.log('CROSS_CHECK_OK');
         for forbidden in ("urllib", "requests", "supabase", "http.client"):
             self.assertNotIn(forbidden, src)
 
+    def test_disclaimer_gate_and_content(self) -> None:
+        self.assertEqual(exp.DISCLAIMER_WAIT_SECONDS, 5)
+        self.assertFalse(exp.can_accept_disclaimer(5, True))
+        self.assertFalse(exp.can_accept_disclaimer(1, True))
+        self.assertFalse(exp.can_accept_disclaimer(0, False))
+        self.assertTrue(exp.can_accept_disclaimer(0, True))
+        for kw in ("风险", "代理 DLL", "使用方法", "停止并还原文件"):
+            self.assertIn(kw, exp.DISCLAIMER_TEXT)
+
 
 if __name__ == "__main__":
     unittest.main()
