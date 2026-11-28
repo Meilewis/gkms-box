@@ -71,6 +71,7 @@ DMM_PLAYER_CANDIDATES = (
 SESSION_REL_PATHS = (
     "xinput9_1_0.dll",
     "winmm.dll",
+    "winmm_real.dll",
     "version.dll",
     "gakumas-local/config.json",
     "gakumas-local/localizationConfig.json",

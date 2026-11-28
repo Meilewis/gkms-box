@@ -6,7 +6,9 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 import gkms_local_exporter as exp
@@ -74,6 +76,41 @@ console.log('CROSS_CHECK_OK');
         self.assertTrue(exp.can_accept_disclaimer(0, True))
         for kw in ("风险", "代理 DLL", "使用方法", "停止并还原文件", "病毒佬", "本地离线", "禁止商用", "版权", "侵删"):
             self.assertIn(kw, exp.DISCLAIMER_TEXT)
+
+    def test_session_rel_paths_cover_all_game_env_files(self) -> None:
+        self.assertIn("winmm_real.dll", exp.SESSION_REL_PATHS)
+        game_env = Path(__file__).resolve().parent / "game_env"
+        if game_env.is_dir():
+            actual = {p.relative_to(game_env).as_posix() for p in game_env.rglob("*") if p.is_file()}
+            self.assertTrue(actual.issubset(set(exp.SESSION_REL_PATHS)), f"缺失依赖: {actual - set(exp.SESSION_REL_PATHS)}")
+
+    def test_plant_and_restore_roundtrip(self) -> None:
+        game_env = Path(__file__).resolve().parent / "game_env"
+        if not game_env.is_dir():
+            self.skipTest("game_env 目录不存在")
+        tmp_dir = Path(tempfile.mkdtemp(prefix="gkms_plant_test_"))
+        try:
+            (tmp_dir / "gakumas.exe").write_bytes(b"GAME")
+            (tmp_dir / "version.dll").write_bytes(b"ORIG_VERSION_DLL")
+            (tmp_dir / "gakumas-local").mkdir(parents=True, exist_ok=True)
+            (tmp_dir / "gakumas-local" / "config.json").write_text('{"orig": true}', encoding="utf-8")
+
+            notes = exp.plant_session_files(tmp_dir)
+            self.assertGreater(len(notes), 0)
+            self.assertTrue((tmp_dir / "winmm.dll").is_file())
+            self.assertTrue((tmp_dir / "winmm_real.dll").is_file())
+            self.assertTrue((tmp_dir / "xinput9_1_0.dll").is_file())
+
+            busy = exp.restore_session_files(tmp_dir)
+            self.assertFalse(busy)
+            self.assertFalse((tmp_dir / "winmm.dll").exists())
+            self.assertFalse((tmp_dir / "winmm_real.dll").exists())
+            self.assertFalse((tmp_dir / "xinput9_1_0.dll").exists())
+            self.assertFalse((tmp_dir / exp.BACKUP_DIR_NAME).exists())
+            self.assertEqual((tmp_dir / "version.dll").read_bytes(), b"ORIG_VERSION_DLL")
+            self.assertEqual((tmp_dir / "gakumas-local" / "config.json").read_text("utf-8"), '{"orig": true}')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
