@@ -12,6 +12,30 @@
     "image": "assets/cards/s_card-3-0122.webp"
   },
   {
+    "id": "s_card-3-0117",
+    "key": "3-0117",
+    "rarity": "3",
+    "number": "0117",
+    "attr": "vo",
+    "plan": "Sense",
+    "name": "次はボクの番や！",
+    "isLimited": false,
+    "order": 1989200117,
+    "image": "assets/cards/s_card-3-0117.webp"
+  },
+  {
+    "id": "s_card-3-0116",
+    "key": "3-0116",
+    "rarity": "3",
+    "number": "0116",
+    "attr": "da",
+    "plan": "Anomaly",
+    "name": "足を引っ張るなよ",
+    "isLimited": false,
+    "order": 1989200116,
+    "image": "assets/cards/s_card-3-0116.webp"
+  },
+  {
     "id": "s_card-3-0115",
     "key": "3-0115",
     "rarity": "3",
@@ -1402,6 +1426,18 @@
     "isLimited": false,
     "order": 1999900000,
     "image": "assets/cards/s_card-3-0000.webp"
+  },
+  {
+    "id": "s_card-2-0085",
+    "key": "2-0085",
+    "rarity": "2",
+    "number": "0085",
+    "attr": "vo",
+    "plan": "Anomaly",
+    "name": "ヒーロー参上",
+    "isLimited": false,
+    "order": 2989200085,
+    "image": "assets/cards/s_card-2-0085.webp"
   },
   {
     "id": "s_card-2-0084",

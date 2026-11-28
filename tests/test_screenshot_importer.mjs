@@ -20,15 +20,16 @@ const fingerprintsPayload = JSON.parse(
 
 const catalogByKey = Object.fromEntries(supportCatalog.map((c) => [c.key, c]));
 
-test('decodeFingerprintDb 正确解码 201 张支援卡多视角单位向量', () => {
+test('decodeFingerprintDb 正确解码全量支援卡多视角单位向量', () => {
   const db = Importer.decodeFingerprintDb(fingerprintsPayload);
-  assert.equal(db.entries.length, 201);
+  assert.ok(supportCatalog.length >= 204);
+  assert.equal(db.entries.length, supportCatalog.length);
   assert.equal(db.featW, 14);
   assert.equal(db.featH, 9);
   assert.equal(db.variantsPerCard, 7);
   assert.equal(db.dim, 378);
 
-  for (const idx of [0, 50, 150, 200]) {
+  for (const idx of [0, 50, 150, db.entries.length - 1]) {
     const entry = db.entries[idx];
     assert.ok(catalogByKey[entry.key], `missing catalog key ${entry.key}`);
     for (const vec of entry.variants) {

@@ -5,6 +5,7 @@
 的 0~4 破期望属性计算表达式与路线预设，生成 cards_data.json，并对照 J 列满破公式做全量校验。
 """
 
+import argparse
 import json
 import math
 import os
@@ -13,7 +14,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
-DEFAULT_XLSX = r"D:\BaiduNetdiskDownload\chromedownload\支援卡-11.3新卡实装.xlsx"
+DEFAULT_XLSX = r"D:\BaiduNetdiskDownload\chromedownload\支援卡-11.27新卡实装.xlsx"
 BASE_DIR = Path(__file__).resolve().parent
 SUPPORT_JSON = BASE_DIR.parent / "web" / "public" / "data" / "support.json"
 OUT_JSON = BASE_DIR / "cards_data.json"
@@ -464,7 +465,12 @@ def eval_route_defaults(wb: WorkbookReader):
 
 
 def main():
-    wb = WorkbookReader(DEFAULT_XLSX)
+    parser = argparse.ArgumentParser(description="从支援卡 Excel 提取 cards_data.json")
+    parser.add_argument("--xlsx", default=DEFAULT_XLSX, help="Excel 文件路径（默认使用 DEFAULT_XLSX）")
+    args = parser.parse_args()
+    xlsx_path = args.xlsx
+
+    wb = WorkbookReader(xlsx_path)
     sup_raw = json.loads(SUPPORT_JSON.read_text(encoding="utf-8"))
     sup_list = sup_raw["items"] if isinstance(sup_raw, dict) and "items" in sup_raw else sup_raw
     sup_by_key = {x["key"]: x for x in sup_list}
@@ -629,7 +635,7 @@ def main():
         )
 
     out = {
-        "source": os.path.basename(DEFAULT_XLSX),
+        "source": os.path.basename(xlsx_path),
         "cardCount": len(cards),
         "supportMatchCount": match_ok,
         "selfCheckPassed": self_check_pass,

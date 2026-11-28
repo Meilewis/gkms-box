@@ -68,11 +68,13 @@ const CHAR_ALIASES = {
   ttmr: ['ttmr', '月村手毬', '月村', '手毬', '手球'],
 };
 
-test('HIF 引擎编译与 2895/2895 线性百分比校验通过', () => {
+test('HIF 引擎编译与 3000/3000 线性百分比校验通过', () => {
+  const hifCardsJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'data', 'hif_cards.json'), 'utf8'));
   const engine = HifPlanner.loadHifEngine(PLUGIN_DIR);
-  assert.equal(engine.cardCount, 193);
-  assert.equal(engine.totalChecks, 2895);
-  assert.equal(engine.verifiedCount, 2895);
+  assert.equal(engine.cardCount, hifCardsJson.cards.length);
+  assert.equal(engine.cardCount, 200);
+  assert.equal(engine.totalChecks, engine.cardCount * 15);
+  assert.equal(engine.verifiedCount, 3000);
 });
 
 test('HIF 求解引擎三组黄金基准与 Python v2 100% 一致且耗时 < 2.5s', () => {
@@ -276,14 +278,15 @@ test('resolveIdolForHif 智能匹配各类查询', () => {
   assert.equal(jpKllj.idol.plan, 'Logic');
 });
 
-test('网页端全量 315 张 P 卡与皮肤生成的「复制配卡指令」100% 精准命中目标角色与流派', () => {
+test('网页端全量 P 卡与皮肤生成的「复制配卡指令」100% 精准命中目标角色与流派', () => {
   const Plugin = loadPluginHelpers();
   const webChars = JSON.parse(fs.readFileSync(path.join(WEB_DATA_DIR, 'characters.json'), 'utf8'));
   const webCidol = JSON.parse(fs.readFileSync(path.join(WEB_DATA_DIR, 'cidol.json'), 'utf8'));
   const webCidolByKey = Object.fromEntries(webCidol.map((c) => [c.key, c]));
   const webCatalog = { characters: webChars, cidol: webCidol, cidolByKey: webCidolByKey };
 
-  assert.equal(webCidol.length, 315);
+  assert.ok(webCidol.length >= 317, `预期 P 卡及皮肤数 >= 317，实际 ${webCidol.length}`);
+  assert.ok(webCidolByKey['amao-3-023'] && webCidolByKey['atbm-3-020']);
   let matched = 0;
   for (const s of webCidol) {
     const charName = webChars[s.character] || s.character.toUpperCase();
@@ -297,7 +300,7 @@ test('网页端全量 315 张 P 卡与皮肤生成的「复制配卡指令」100
     assert.equal(resolved.idol.plan, s.plan, `流派不匹配 ${s.key}: ${hifCmd}`);
     matched += 1;
   }
-  assert.equal(matched, 315);
+  assert.equal(matched, webCidol.length);
 });
 
 test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求解生效', () => {
@@ -453,4 +456,60 @@ test('HIF 参数编解码器前后端字节一致、边界拒绝与自定义求�
   assert.equal(allMaxDec.code, allMaxCode);
   assert.equal(allMaxDec.fullParams.mp1, 100);
   assert.equal(allMaxDec.fullParams.B40, 60);
+});
+
+test('新增 7 张 S 卡及 3-0117 t强化词条变量求值无 NaN/undefined', () => {
+  const engine = HifPlanner.loadHifEngine(PLUGIN_DIR);
+  const hifCardsJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'data', 'hif_cards.json'), 'utf8'));
+  const newKeys = ['3-0122', '3-0117', '3-0116', '3-0115', '3-0114', '2-0085', '2-0084'];
+  const baseR = {
+    B11: 1200, B12: 900, B13: 300,
+    B14: 6, B15: 6, B17: 2, B18: 2, B20: 0, B21: 0,
+    B23: 6, B24: 12, B25: 10, B26: 10, B27: 12,
+    B28: 2, B29: 2, B30: 6, B31: 2, B32: 0, B33: 2, B34: 4,
+    B35: 6, B36: 3, B37: 3, B38: 3, B39: 0, B40: 20, B41: 0,
+    B42: 10, B43: 12, B44: 10, B45: 12, B46: 0, B47: 6, B48: 2, B49: 4, B50: 5,
+  };
+
+  for (const key of newKeys) {
+    const rawCard = hifCardsJson.cards.find((c) => c.supportKey === key);
+    assert.ok(rawCard, `hif_cards.json 缺少新卡 ${key}`);
+    const engineCard = engine.cards.find((c) => c.supportKey === key);
+    assert.ok(engineCard, `engine.cards 缺少新卡 ${key}`);
+    for (const mode of ['noItem', 'withItem']) {
+      for (let lb = 0; lb <= 4; lb += 1) {
+        const exprs = rawCard.exprs[mode][String(lb)];
+        assert.equal(exprs.length, 3);
+        for (const expr of exprs) {
+          const fn = HifPlanner.compileCardExpr(expr);
+          const val = fn(baseR, false);
+          assert.equal(typeof val, 'number');
+          assert.ok(Number.isFinite(val), `${key} ${mode} lb=${lb} 求值非法: ${val}`);
+        }
+      }
+    }
+  }
+
+  // 专门验证 3-0117 (戈登咲姆季) 的 t强化 词条：依赖 (B28 + B29) 且封顶 3 次（2~4破每次 +28）
+  const card3117 = hifCardsJson.cards.find((c) => c.supportKey === '3-0117');
+  assert.deepEqual(card3117.deps, ['B11', 'B12', 'B13', 'B15', 'B18', 'B21', 'B28', 'B29', 'B34']);
+  const fn3117Max = HifPlanner.compileCardExpr(card3117.exprs.withItem['4'][0]);
+  const vSum1 = fn3117Max({ ...baseR, B28: 1, B29: 0 }, false);
+  const vSum3 = fn3117Max({ ...baseR, B28: 2, B29: 1 }, false);
+  const vSum4 = fn3117Max({ ...baseR, B28: 2, B29: 2 }, false);
+  assert.equal(vSum3 - vSum1, 56, 't强化总次数从 1 升到 3 应增加 2×28=56');
+  assert.equal(vSum4, vSum3, 't强化总次数超过 3 应封顶为 3');
+
+  // 实际带入求解器验证包含 3-0117 等新卡时可完整求出有限高分
+  const newCardBox = {
+    '3-0117': 4,
+    '3-0122': 4,
+    '3-0115': 4,
+    '3-0064': 4,
+    '3-0069': 4,
+    '3-0070': 4,
+  };
+  const solved = HifPlanner.solveBestHifDeck(cidolByKey['hrnm-3-017'], newCardBox, engine, supportByKey);
+  assert.equal(solved.ok, true);
+  assert.ok(Number.isFinite(solved.result.rating.finalRating) && solved.result.rating.finalRating > 30000);
 });

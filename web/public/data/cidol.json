@@ -609,6 +609,35 @@
     }
   },
   {
+    "key": "amao-3-023",
+    "id": "i_card-skin-amao-3-023",
+    "idolCardId": "i_card-amao-3-023",
+    "character": "amao",
+    "rarity": "3",
+    "number": "023",
+    "name": "アンバランス",
+    "baseName": "アンバランス",
+    "isSkinVariant": false,
+    "isLimited": false,
+    "plan": "Anomaly",
+    "variants": [
+      "0",
+      "1"
+    ],
+    "images": {
+      "0": "assets/cidol/cidol-amao-3-023_0.webp",
+      "1": "assets/cidol/cidol-amao-3-023_1.webp"
+    },
+    "stats": {
+      "vo": 75,
+      "da": 65,
+      "vi": 55,
+      "voRate": 22.0,
+      "daRate": 6.0,
+      "viRate": 18.0
+    }
+  },
+  {
     "key": "amao-2-000",
     "id": "i_card-skin-amao-2-000",
     "idolCardId": "i_card-amao-2-000",
@@ -1236,6 +1265,35 @@
     "images": {
       "0": "assets/cidol/cidol-atbm-3-019_0.webp",
       "1": "assets/cidol/cidol-atbm-3-019_1.webp"
+    },
+    "stats": {
+      "vo": 80,
+      "da": 90,
+      "vi": 70,
+      "voRate": 14.0,
+      "daRate": 17.0,
+      "viRate": 12.0
+    }
+  },
+  {
+    "key": "atbm-3-020",
+    "id": "i_card-skin-atbm-3-020",
+    "idolCardId": "i_card-atbm-3-020",
+    "character": "atbm",
+    "rarity": "3",
+    "number": "020",
+    "name": "アンバランス",
+    "baseName": "アンバランス",
+    "isSkinVariant": false,
+    "isLimited": false,
+    "plan": "Sense",
+    "variants": [
+      "0",
+      "1"
+    ],
+    "images": {
+      "0": "assets/cidol/cidol-atbm-3-020_0.webp",
+      "1": "assets/cidol/cidol-atbm-3-020_1.webp"
     },
     "stats": {
       "vo": 80,
