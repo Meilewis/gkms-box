@@ -27,6 +27,8 @@ IMG_W = CELL_W - CELL_PAD * 2  # 284
 IMG_H = 159                    # 16:9 干净原图比例
 CELL_H = 268
 HEADER_H = 172
+SECTION_HEADER_H = 42
+SECTION_GAP = 18
 FOOTER_H = 24
 
 BG_COLOR = (255, 255, 255)
@@ -118,7 +120,7 @@ def release_sort_key(card, sup_by_key):
     order = int(sup["order"]) if sup and sup.get("order") is not None else 9999999999
     batch = (order % 1_000_000_000) // 10000
     num = int(card["supportKey"].split("-")[1])
-    return (batch, -int(card["rarity"]), -num)
+    return (-int(card["rarity"]), batch, -num)
 
 
 def build_ranked_cards():
@@ -136,17 +138,51 @@ def main():
 
     ranked_cards, sup_by_key = build_ranked_cards()
     card_total = len(ranked_cards)
-    rows = math.ceil(card_total / COLS)
-    grid_y0 = HEADER_H
-    grid_y1 = grid_y0 + rows * CELL_H
-    total_h = grid_y1 + FOOTER_H
+    ssr_cards = [c for c in ranked_cards if int(c["rarity"]) == 3]
+    sr_cards = [c for c in ranked_cards if int(c["rarity"]) != 3]
 
-    print(f"Ranked Sheet Canvas: {W}x{total_h}, rows={rows}, total_cards={card_total}")
+    sections = [
+        sec
+        for sec in (
+            {
+                "title": "SSR 支援卡",
+                "cards": ssr_cards,
+                "accent": (245, 158, 11),
+            },
+            {
+                "title": "SR 支援卡",
+                "cards": sr_cards,
+                "accent": (100, 116, 139),
+            },
+        )
+        if sec["cards"]
+    ]
+
+    grid_body_h = sum(
+        SECTION_HEADER_H + math.ceil(len(sec["cards"]) / COLS) * CELL_H for sec in sections
+    )
+    total_h = HEADER_H + grid_body_h + SECTION_GAP * max(0, len(sections) - 1) + FOOTER_H
+
+    print(
+        f"Ranked Sheet Canvas: {W}x{total_h}, sections={len(sections)}, "
+        f"SSR={len(ssr_cards)}, SR={len(sr_cards)}, total_cards={card_total}"
+    )
+    if ssr_cards:
+        print(
+            f"  SSR range: first={ssr_cards[0]['supportKey']}({ssr_cards[0]['alias']}) -> "
+            f"last={ssr_cards[-1]['supportKey']}({ssr_cards[-1]['alias']})"
+        )
+    if sr_cards:
+        print(
+            f"  SR  range: first={sr_cards[0]['supportKey']}({sr_cards[0]['alias']}) -> "
+            f"last={sr_cards[-1]['supportKey']}({sr_cards[-1]['alias']})"
+        )
 
     canvas = Image.new("RGB", (W, total_h), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
 
     f_title = get_font(FONT_ZH_BOLD, 30)
+    f_sec_title = get_font(FONT_ZH_BOLD, 18)
     f_count = get_font(FONT_ZH_REG, 15)
     f_notice_b = get_font(FONT_ZH_BOLD, 13)
     f_notice = get_font(FONT_ZH_REG, 13)
@@ -158,7 +194,7 @@ def main():
     draw.rectangle((PAD_X, 20, PAD_X + 6, 56), fill=(234, 88, 12))
     draw.text((PAD_X + 16, 17), "学园偶像大师 · S 卡黑话对照表", font=f_title, fill=TEXT_MAIN)
 
-    count_text = f"共收录 {card_total} 张 S 卡（按实装批次倒序）"
+    count_text = f"共收录 {card_total} 张 S 卡（SSR {len(ssr_cards)} / SR {len(sr_cards)} · 最新实装在前）"
     count_w = int(text_width(draw, count_text, f_count))
     draw.text((W - PAD_X - count_w, 29), count_text, font=f_count, fill=TEXT_SUB)
 
@@ -189,85 +225,110 @@ def main():
         body_col = (51, 65, 85) if idx < 2 else (71, 85, 105)
         draw.text((PAD_X + 16 + lw + 2, ry), body, font=f_notice, fill=body_col)
 
-    # 2. 单表连续 6 列网格按实装批次降序排列全部 S 卡
-    total_slots = rows * COLS
-    for idx in range(total_slots):
-        r = idx // COLS
-        c = idx % COLS
-        cx1 = PAD_X + c * CELL_W
-        cy1 = grid_y0 + r * CELL_H
-        cx2 = cx1 + CELL_W
-        cy2 = cy1 + CELL_H
+    # 2. 按 SSR / SR 分区绘制 6 列网格（组内按实装批次倒序：最新在前）
+    cur_y = HEADER_H
+    for sec in sections:
+        sec_cards = sec["cards"]
+        sec_count = len(sec_cards)
+        sec_rows = math.ceil(sec_count / COLS)
+        sec_slots = sec_rows * COLS
 
-        if idx >= card_total:
-            draw.rectangle((cx1, cy1, cx2, cy2), fill=EMPTY_CELL_BG)
-            continue
+        # 分区标题栏
+        draw.rectangle(
+            (PAD_X, cur_y, W - PAD_X, cur_y + SECTION_HEADER_H),
+            fill=(248, 250, 252),
+            outline=BORDER_COLOR,
+            width=1,
+        )
+        draw.rectangle((PAD_X, cur_y, PAD_X + 5, cur_y + SECTION_HEADER_H), fill=sec["accent"])
+        draw.text((PAD_X + 16, cur_y + 9), sec["title"], font=f_sec_title, fill=TEXT_MAIN)
 
-        card = ranked_cards[idx]
-        am = ATTR_META[card["attr"]]
-        rm = RARITY_META.get(card["rarity"], RARITY_META[2])
-        pm = PLAN_META[card["plan"]]
+        sec_sub = f"共 {sec_count} 张 · 最新实装在前"
+        sec_sub_w = int(text_width(draw, sec_sub, f_count))
+        draw.text((W - PAD_X - 14 - sec_sub_w, cur_y + 11), sec_sub, font=f_count, fill=TEXT_SUB)
 
-        draw.rectangle((cx1, cy1, cx2, cy2), fill=BG_COLOR)
-        draw.rectangle((cx1 + 1, cy1 + 1, cx2 - 1, cy1 + 2), fill=am["accent"])
+        grid_y0 = cur_y + SECTION_HEADER_H
+        grid_y1 = grid_y0 + sec_rows * CELL_H
 
-        img_x = cx1 + CELL_PAD
-        img_y = cy1 + 9
-        sup_meta = sup_by_key.get(card["supportKey"])
-        if sup_meta:
-            img_path = ASSETS_DIR / sup_meta["image"]
-            if img_path.is_file():
-                with Image.open(img_path) as raw_im:
-                    cropped = cover_crop(raw_im.convert("RGB"), IMG_W, IMG_H)
-                canvas.paste(cropped, (img_x, img_y))
-        draw.rectangle((img_x, img_y, img_x + IMG_W - 1, img_y + IMG_H - 1), outline=(226, 232, 240), width=1)
+        for idx in range(sec_slots):
+            r = idx // COLS
+            c = idx % COLS
+            cx1 = PAD_X + c * CELL_W
+            cy1 = grid_y0 + r * CELL_H
+            cx2 = cx1 + CELL_W
+            cy2 = cy1 + CELL_H
 
-        # 元数据行：SSR/SR + Vo/Da/Vi + 流派 + SP + 右侧卡号
-        meta_y = img_y + IMG_H + 6
-        bx = img_x
-        bx = draw_badge(draw, bx, meta_y, rm["name"], f_tag, rm["bg"], rm["fg"], bd=rm["bd"], pad_x=5)
-        bx = draw_badge(draw, bx, meta_y, am["code"], f_tag, am["tint"], am["fg"], bd=am["bd"], pad_x=5)
-        bx = draw_badge(draw, bx, meta_y, pm["name"], f_tag, pm["bg"], pm["fg"], bd=pm["bd"], pad_x=5)
-        if card.get("isSp") == 1:
-            draw_badge(draw, bx, meta_y, "SP", f_tag, (234, 88, 12), (255, 255, 255), bd=None, pad_x=5)
+            if idx >= sec_count:
+                draw.rectangle((cx1, cy1, cx2, cy2), fill=EMPTY_CELL_BG)
+                continue
 
-        key_str = card["supportKey"]
-        kw = int(text_width(draw, key_str, f_key))
-        draw.text((cx2 - CELL_PAD - kw, meta_y + 2), key_str, font=f_key, fill=TEXT_MUTED)
+            card = sec_cards[idx]
+            am = ATTR_META[card["attr"]]
+            rm = RARITY_META.get(card["rarity"], RARITY_META[2])
+            pm = PLAN_META[card["plan"]]
 
-        # 黑话主标题与日文原名
-        alias = card["alias"].strip()
-        jp = card["jpName"].strip()
-        alias_y = meta_y + 25
-        alias_font = None
-        for sz in (20, 18, 16, 15):
-            ft = get_font(FONT_ZH_BOLD, sz)
-            if text_width(draw, alias, ft) <= IMG_W:
-                alias_font = ft
-                break
+            draw.rectangle((cx1, cy1, cx2, cy2), fill=BG_COLOR)
+            draw.rectangle((cx1 + 1, cy1 + 1, cx2 - 1, cy1 + 2), fill=am["accent"])
 
-        if alias_font is None:
-            alias_font = get_font(FONT_ZH_BOLD, 15)
-            alines = wrap_lines(draw, alias, alias_font, IMG_W, 2)
-            for li, al in enumerate(alines):
-                draw.text((img_x, alias_y + li * 19), al, font=alias_font, fill=TEXT_MAIN)
-            jp_y = alias_y + len(alines) * 19 + 4
-            jlines = wrap_lines(draw, jp, f_jp, IMG_W, 1)
-        else:
-            draw.text((img_x, alias_y), alias, font=alias_font, fill=TEXT_MAIN)
-            jp_y = alias_y + 27
-            jlines = wrap_lines(draw, jp, f_jp, IMG_W, 2)
+            img_x = cx1 + CELL_PAD
+            img_y = cy1 + 9
+            sup_meta = sup_by_key.get(card["supportKey"])
+            if sup_meta:
+                img_path = ASSETS_DIR / sup_meta["image"]
+                if img_path.is_file():
+                    with Image.open(img_path) as raw_im:
+                        cropped = cover_crop(raw_im.convert("RGB"), IMG_W, IMG_H)
+                    canvas.paste(cropped, (img_x, img_y))
+            draw.rectangle((img_x, img_y, img_x + IMG_W - 1, img_y + IMG_H - 1), outline=(226, 232, 240), width=1)
 
-        for li, jl in enumerate(jlines):
-            draw.text((img_x, jp_y + li * 17), jl, font=f_jp, fill=TEXT_SUB)
+            # 元数据行：SSR/SR + Vo/Da/Vi + 流派 + SP + 右侧卡号
+            meta_y = img_y + IMG_H + 6
+            bx = img_x
+            bx = draw_badge(draw, bx, meta_y, rm["name"], f_tag, rm["bg"], rm["fg"], bd=rm["bd"], pad_x=5)
+            bx = draw_badge(draw, bx, meta_y, am["code"], f_tag, am["tint"], am["fg"], bd=am["bd"], pad_x=5)
+            bx = draw_badge(draw, bx, meta_y, pm["name"], f_tag, pm["bg"], pm["fg"], bd=pm["bd"], pad_x=5)
+            if card.get("isSp") == 1:
+                draw_badge(draw, bx, meta_y, "SP", f_tag, (234, 88, 12), (255, 255, 255), bd=None, pad_x=5)
 
-    # 绘制共享 1px Wiki 表格网格线
-    for r in range(rows + 1):
-        ly = grid_y0 + r * CELL_H
-        draw.line([(PAD_X, ly), (W - PAD_X, ly)], fill=BORDER_COLOR, width=1)
-    for c in range(COLS + 1):
-        lx = PAD_X + c * CELL_W
-        draw.line([(lx, grid_y0), (lx, grid_y1)], fill=BORDER_COLOR, width=1)
+            key_str = card["supportKey"]
+            kw = int(text_width(draw, key_str, f_key))
+            draw.text((cx2 - CELL_PAD - kw, meta_y + 2), key_str, font=f_key, fill=TEXT_MUTED)
+
+            # 黑话主标题与日文原名
+            alias = card["alias"].strip()
+            jp = card["jpName"].strip()
+            alias_y = meta_y + 25
+            alias_font = None
+            for sz in (20, 18, 16, 15):
+                ft = get_font(FONT_ZH_BOLD, sz)
+                if text_width(draw, alias, ft) <= IMG_W:
+                    alias_font = ft
+                    break
+
+            if alias_font is None:
+                alias_font = get_font(FONT_ZH_BOLD, 15)
+                alines = wrap_lines(draw, alias, alias_font, IMG_W, 2)
+                for li, al in enumerate(alines):
+                    draw.text((img_x, alias_y + li * 19), al, font=alias_font, fill=TEXT_MAIN)
+                jp_y = alias_y + len(alines) * 19 + 4
+                jlines = wrap_lines(draw, jp, f_jp, IMG_W, 1)
+            else:
+                draw.text((img_x, alias_y), alias, font=alias_font, fill=TEXT_MAIN)
+                jp_y = alias_y + 27
+                jlines = wrap_lines(draw, jp, f_jp, IMG_W, 2)
+
+            for li, jl in enumerate(jlines):
+                draw.text((img_x, jp_y + li * 17), jl, font=f_jp, fill=TEXT_SUB)
+
+        # 绘制本分区共享 1px Wiki 表格网格线
+        for r in range(sec_rows + 1):
+            ly = grid_y0 + r * CELL_H
+            draw.line([(PAD_X, ly), (W - PAD_X, ly)], fill=BORDER_COLOR, width=1)
+        for c in range(COLS + 1):
+            lx = PAD_X + c * CELL_W
+            draw.line([(lx, grid_y0), (lx, grid_y1)], fill=BORDER_COLOR, width=1)
+
+        cur_y = grid_y1 + SECTION_GAP
 
     # 3. 压缩保存与双份输出
     PLUGIN_IMG_PATH.parent.mkdir(parents=True, exist_ok=True)

@@ -1421,3 +1421,43 @@ test('更新支援卡表: 权限隔离、路径越界拦截、端到端热重载
     assert.equal(slangV3.ret.attrs.data.toString('utf8'), 'NEW_SLANG_JPEG_V3');
   }
 });
+
+test('buildSlangSheetHtml: SSR 独立分区在 SR 上方，且各自组内按实装批次倒序', () => {
+  const supportCatalog = [
+    { key: '3-0116', rarity: '3', number: '0116', attr: 'da', plan: 'Anomaly', name: '新SSR小号', order: 1989200116 },
+    { key: '3-0117', rarity: '3', number: '0117', attr: 'vo', plan: 'Sense', name: '新SSR大号', order: 1989200117 },
+    { key: '3-0019', rarity: '3', number: '0019', attr: 'vi', plan: 'Logic', name: '老SSR卡', order: 1999900019 },
+    { key: '2-0085', rarity: '2', number: '0085', attr: 'vo', plan: 'Sense', name: '最新SR卡', order: 1989200085 },
+    { key: '2-0010', rarity: '2', number: '0010', attr: 'da', plan: 'Common', name: '老SR卡', order: 2999900010 },
+  ];
+  // 故意打乱输入顺序，且让 2-0085 的 batch(8920) 小于 3-0019 的 batch(9999)，确保 SR 不会插队到 SSR 上方
+  const cards = [
+    { supportKey: '2-0010', rarity: 2, attr: 2, plan: 0, isSp: 0, alias: '老SR别名', jpName: '老SR卡' },
+    { supportKey: '3-0019', rarity: 3, attr: 3, plan: 2, isSp: 0, alias: '老SSR别名', jpName: '老SSR卡' },
+    { supportKey: '2-0085', rarity: 2, attr: 1, plan: 1, isSp: 0, alias: '新SR别名', jpName: '最新SR卡' },
+    { supportKey: '3-0116', rarity: 3, attr: 2, plan: 3, isSp: 1, alias: '新SSR小号别名', jpName: '新SSR小号' },
+    { supportKey: '3-0117', rarity: 3, attr: 1, plan: 1, isSp: 1, alias: '新SSR大号别名', jpName: '新SSR大号' },
+  ];
+
+  const html = Renderer.buildSlangSheetHtml({ cards, supportCatalog, dataDir: DATA_DIR });
+
+  assert.ok(html.includes('SSR 3 / SR 2 · 最新实装在前'), '顶部统计应展示 SSR/SR 数量');
+  const ssrTitlePos = html.indexOf('<span class="slang-section-title">SSR 支援卡</span>');
+  const srTitlePos = html.indexOf('<span class="slang-section-title">SR 支援卡</span>');
+  assert.ok(ssrTitlePos !== -1 && srTitlePos !== -1 && ssrTitlePos < srTitlePos, 'SSR 分区标题必须严格位于 SR 分区标题之前');
+
+  const p3117 = html.indexOf('<span class="slang-key">3-0117</span>');
+  const p3116 = html.indexOf('<span class="slang-key">3-0116</span>');
+  const p3019 = html.indexOf('<span class="slang-key">3-0019</span>');
+  const p2085 = html.indexOf('<span class="slang-key">2-0085</span>');
+  const p2010 = html.indexOf('<span class="slang-key">2-0010</span>');
+
+  assert.ok(
+    p3117 > ssrTitlePos && p3117 < p3116 && p3116 < p3019 && p3019 < srTitlePos,
+    `SSR 组内应按最新实装倒序且全部在 SR 标题之前: ${JSON.stringify({ ssrTitlePos, p3117, p3116, p3019, srTitlePos })}`
+  );
+  assert.ok(
+    p2085 > srTitlePos && p2085 < p2010,
+    `SR 组内应全部在 SR 标题之后并按最新实装倒序: ${JSON.stringify({ srTitlePos, p2085, p2010 })}`
+  );
+});

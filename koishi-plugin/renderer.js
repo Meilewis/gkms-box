@@ -986,12 +986,17 @@ function buildSlangSheetHtml({ cards, supportCatalog, dataDir }) {
   const rankedCards = validCards.slice().sort((a, b) => {
     const ka = releaseSortKey(a);
     const kb = releaseSortKey(b);
-    return ka.batch - kb.batch || kb.rarity - ka.rarity || kb.num - ka.num;
+    return kb.rarity - ka.rarity || ka.batch - kb.batch || kb.num - ka.num;
   });
 
   const cols = 6;
   const totalCards = rankedCards.length;
-  const totalSlots = Math.max(cols, Math.ceil(totalCards / cols) * cols);
+  const ssrCards = rankedCards.filter((c) => Number(c.rarity) === 3);
+  const srCards = rankedCards.filter((c) => Number(c.rarity) !== 3);
+  const sections = [
+    { code: 'ssr', cls: 'is-ssr', title: 'SSR 支援卡', cards: ssrCards },
+    { code: 'sr', cls: 'is-sr', title: 'SR 支援卡', cards: srCards },
+  ].filter((sec) => sec.cards.length > 0);
 
   const attrMeta = {
     1: { code: 'Vo', accent: '#e11d48', bg: '#fff1f2', bd: '#fda4af', fg: '#be123c' },
@@ -1005,14 +1010,7 @@ function buildSlangSheetHtml({ cards, supportCatalog, dataDir }) {
     3: { name: '非凡', cls: 'Anomaly', bg: '#faf5ff', bd: '#d8b4fe', fg: '#7e22ce' },
   };
 
-  const cellsHtml = [];
-  for (let i = 0; i < totalSlots; i += 1) {
-    if (i >= totalCards) {
-      cellsHtml.push('<div class="slang-cell is-empty"></div>');
-      continue;
-    }
-
-    const card = rankedCards[i];
+  const renderCardCell = (card) => {
     const supportKey = String(card.supportKey || '');
     const keyParts = supportKey.split('-');
     const supMeta = Object.prototype.hasOwnProperty.call(supByKey, supportKey) ? supByKey[supportKey] : null;
@@ -1036,7 +1034,7 @@ function buildSlangSheetHtml({ cards, supportCatalog, dataDir }) {
            <div class="slang-fb-sub">${escapeHtml(pm.name)} · #${escapeHtml(numberStr)}</div>
          </div>`;
 
-    cellsHtml.push(`
+    return `
       <div class="slang-cell" style="--accent:${am.accent}">
         <div class="slang-media">
           ${mediaHtml}
@@ -1053,8 +1051,32 @@ function buildSlangSheetHtml({ cards, supportCatalog, dataDir }) {
         <div class="slang-alias">${escapeHtml(aliasText)}</div>
         <div class="slang-jp">${escapeHtml(jpText)}</div>
       </div>
-    `);
-  }
+    `;
+  };
+
+  const sectionsHtml = sections.map((sec) => {
+    const secCount = sec.cards.length;
+    const secSlots = Math.max(cols, Math.ceil(secCount / cols) * cols);
+    const sectionCellsHtml = [];
+    for (let i = 0; i < secSlots; i += 1) {
+      if (i >= secCount) {
+        sectionCellsHtml.push('<div class="slang-cell is-empty"></div>');
+      } else {
+        sectionCellsHtml.push(renderCardCell(sec.cards[i]));
+      }
+    }
+    return `
+      <section class="slang-section" data-rarity="${sec.code}">
+        <div class="slang-section-head ${sec.cls}">
+          <span class="slang-section-title">${escapeHtml(sec.title)}</span>
+          <span class="slang-section-sub">共 ${secCount} 张 · 最新实装在前</span>
+        </div>
+        <div class="slang-grid">
+          ${sectionCellsHtml.join('')}
+        </div>
+      </section>
+    `;
+  });
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -1113,6 +1135,34 @@ function buildSlangSheetHtml({ cards, supportCatalog, dataDir }) {
   .slang-notice-row b { color: #0f172a; }
   .slang-notice-row.warn b { color: #b45309; }
   .slang-notice-row.warn span { color: #475569; }
+  .slang-section + .slang-section {
+    margin-top: 18px;
+  }
+  .slang-section-head {
+    width: 1800px;
+    height: 42px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 14px;
+    background: #f8fafc;
+    border: 1px solid #d4dbe4;
+    border-bottom: none;
+    border-left: 5px solid #f59e0b;
+  }
+  .slang-section-head.is-sr {
+    border-left-color: #64748b;
+  }
+  .slang-section-title {
+    font-size: 18px;
+    font-weight: 800;
+    color: #0f172a;
+  }
+  .slang-section-sub {
+    font-size: 14px;
+    color: #64748b;
+    font-weight: 500;
+  }
   .slang-grid {
     display: grid;
     grid-template-columns: repeat(6, 300px);
@@ -1217,15 +1267,15 @@ function buildSlangSheetHtml({ cards, supportCatalog, dataDir }) {
         <span class="slang-title-bar"></span>
         <h1 class="slang-title">学园偶像大师 · S 卡黑话对照表</h1>
       </div>
-      <div class="slang-count">共收录 ${totalCards} 张 S 卡（按实装批次倒序）</div>
+      <div class="slang-count">共收录 ${totalCards} 张 S 卡（SSR ${ssrCards.length} / SR ${srCards.length} · 最新实装在前）</div>
     </header>
     <section class="slang-notice">
       <div class="slang-notice-row"><b>黑话来源：</b><span>support.json / 飞书支援卡数据表（原《学园偶像大师》支援卡算分表）及后续新实装卡补充</span></div>
       <div class="slang-notice-row"><b>卡面版权：</b><span>卡池目录与卡面同步自 vertesan/gakumasu-diff；游戏及素材版权归 © Bandai Namco Entertainment Inc. / QualiArts, Inc. 所有</span></div>
       <div class="slang-notice-row warn"><b>免责声明：</b><span>由同好工具 gkms-box（gkms.134491.xyz）整理排版，仅供非营利交流速查，俗称随社区习惯可能存在差异，与官方无关，如有侵权请联系删除</span></div>
     </section>
-    <main class="slang-grid">
-      ${cellsHtml.join('')}
+    <main class="slang-sections">
+      ${sectionsHtml.join('')}
     </main>
   </div>
 </body>
