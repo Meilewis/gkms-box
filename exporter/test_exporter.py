@@ -72,7 +72,7 @@ console.log('CROSS_CHECK_OK');
         self.assertFalse(exp.can_accept_disclaimer(1, True))
         self.assertFalse(exp.can_accept_disclaimer(0, False))
         self.assertTrue(exp.can_accept_disclaimer(0, True))
-        for kw in ("风险", "代理 DLL", "使用方法", "停止并还原文件"):
+        for kw in ("风险", "代理 DLL", "使用方法", "停止并还原文件", "病毒佬", "本地离线", "禁止商用", "版权", "侵删"):
             self.assertIn(kw, exp.DISCLAIMER_TEXT)
 
 
